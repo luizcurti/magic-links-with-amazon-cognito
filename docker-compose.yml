@@ -1,0 +1,34 @@
+services:
+  localstack:
+    container_name: magic-links-localstack
+    # The LocalStack image requires an auth token (the free Hobby plan
+    # is enough). Cognito in particular is not available without one.
+    image: ${LOCALSTACK_IMAGE:-localstack/localstack:latest}
+    ports:
+      - "127.0.0.1:4566:4566"            # LocalStack edge endpoint
+      - "127.0.0.1:4510-4559:4510-4559"  # external service ports
+    environment:
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?Set LOCALSTACK_AUTH_TOKEN in .env (see .env.example)}
+      SERVICES: apigateway,cognito-idp,dynamodb,iam,kms,lambda,logs,ses,sts
+      AWS_DEFAULT_REGION: us-east-1
+      # Lambdas run as sibling containers on this Docker daemon.
+      LAMBDA_DOCKER_NETWORK: magic-links
+      DEBUG: ${LOCALSTACK_DEBUG:-0}
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - magic-links
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+networks:
+  magic-links:
+    name: magic-links
+
+volumes:
+  localstack-data:

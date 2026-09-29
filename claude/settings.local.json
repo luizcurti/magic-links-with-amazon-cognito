@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(yarn *)",
+      "Bash(pnpm *)",
+      "Bash(node *)",
+      "Bash(tsc *)",
+      "Bash(ts-node *)",
+      "Bash(jest *)",
+      "Bash(git rm *)",
+      "Bash(git check-ignore *)",
+      "Bash(docker build *)",
+      "Bash(docker run *)",
+      "Bash(docker exec *)",
+      "Bash(docker ps *)",
+      "Bash(docker logs *)",
+      "Bash(docker stop *)",
+      "Bash(docker start *)",
+      "Bash(docker rm *)",
+      "Bash(docker rmi *)",
+      "Bash(docker network *)",
+      "Bash(docker volume *)",
+      "Bash(docker compose *)",
+      "Bash(docker-compose *)",
+      "Bash(terraform init *)",
+      "Bash(terraform plan *)",
+      "Bash(terraform validate *)",
+      "Bash(terraform fmt *)",
+      "Bash(terraform output *)",
+      "Bash(terraform show *)",
+      "Bash(lsof *)",
+      "Bash(curl *)",
+      "Bash(kill *)",
+      "Bash(disown)",
+      "Bash(xargs -r kill)",
+      "Bash(python3 *)",
+      "Bash(break)",
+      "Read(//private/tmp/**)",
+      "Bash(npm install *)",
+      "Bash(echo \"exit code: $?\")",
+      "Bash(docker compose down -v 2>&1 | tail -10 *)",
+      "Bash(actionlint .github/workflows/ci.yml)",
+      "Bash(terraform version *)"
+    ],
+    "additionalDirectories": [
+      "/private/tmp",
+      "/tmp"
+    ]
+  }
+}

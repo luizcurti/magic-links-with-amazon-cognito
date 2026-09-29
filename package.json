@@ -1,0 +1,40 @@
+{
+  "name": "magic-links-with-amazon-cognito",
+  "version": "1.0.0",
+  "description": "Passwordless magic-link authentication with Amazon Cognito custom auth, running 100% locally on LocalStack.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Luiz Curti",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/frontend"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit && npm run typecheck -w apps/frontend",
+    "test": "vitest run tests/unit",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:coverage": "vitest run tests/unit --coverage",
+    "dev:frontend": "npm run dev -w apps/frontend"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1140.0",
+    "@aws-sdk/client-dynamodb": "^3.1140.0",
+    "@aws-sdk/client-ses": "^3.1140.0",
+    "@aws-sdk/lib-dynamodb": "^3.1140.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.163",
+    "@types/node": "^26.6.2",
+    "@vitest/coverage-v8": "^5.0.2",
+    "aws-sdk-client-mock": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}
