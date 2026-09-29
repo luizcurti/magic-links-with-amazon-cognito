@@ -1,0 +1,652 @@
+{
+  "info": {
+    "name": "Magic Links with Amazon Cognito",
+    "description": "API contract tests. Run in order: each folder feeds variables to the next. `npm run test:api` runs it with newman against the stack deployed on LocalStack.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "apiUrl",
+      "value": "http://localhost:4566/restapis/<api-id>/local/_user_request_"
+    },
+    {
+      "key": "localstackUrl",
+      "value": "http://localhost:4566"
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "idToken",
+      "value": ""
+    },
+    {
+      "key": "emailUpper",
+      "value": ""
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "POST /login",
+      "item": [
+        {
+          "name": "400 - body is not JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{nope"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"says the body is invalid JSON\", () => pm.expect(pm.response.json().message).to.eql(\"Request body must be valid JSON\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - email is missing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"explains the validation error\", () => {",
+                  "  pm.expect(body.message).to.eql(\"Invalid request\");",
+                  "  pm.expect(body.errors.map((e) => e.field)).to.include(\"email\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - email is invalid",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"not-an-email\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"explains the validation error\", () => {",
+                  "  pm.expect(body.message).to.eql(\"Invalid request\");",
+                  "  pm.expect(body.errors.map((e) => e.field)).to.include(\"email\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - body is null",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "null"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"is a validation error\", () => pm.expect(pm.response.json().message).to.eql(\"Invalid request\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - body is an array",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "[]"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"is a validation error\", () => pm.expect(pm.response.json().message).to.eql(\"Invalid request\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - email is too long",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"is a validation error\", () => pm.expect(pm.response.json().message).to.eql(\"Invalid request\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "202 - sends a magic link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{email}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"email\", `api-${Date.now()}@example.com`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 202\", () => pm.response.to.have.status(202));",
+                  "pm.test(\"is never cached\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.eql(\"no-store\"));",
+                  "pm.test(\"gives the same answer for every email (no enumeration)\", () => {",
+                  "  pm.expect(pm.response.json()).to.eql({ message: \"If the email address is valid, a magic link is on its way.\" });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "202 - same response inside the cooldown (no email sent)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{email}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 202\", () => pm.response.to.have.status(202));",
+                  "pm.test(\"gives the same answer for every email (no enumeration)\", () => {",
+                  "  pm.expect(pm.response.json()).to.eql({ message: \"If the email address is valid, a magic link is on its way.\" });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 - wrong HTTP method",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiUrl}}/login"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "LocalStack mailbox",
+      "item": [
+        {
+          "name": "Read the magic link from LocalStack SES",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{localstackUrl}}/_aws/ses"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const email = pm.collectionVariables.get(\"email\");",
+                  "const latest = pm.response.json().messages",
+                  "  .filter((m) => m.Destination.ToAddresses.includes(email))",
+                  "  .sort((a, b) => Date.parse(a.Timestamp) - Date.parse(b.Timestamp))",
+                  "  .at(-1);",
+                  "const link = latest && latest.Body.text_part.match(/https?:\\/\\/\\S+token=[0-9a-f]{64}/);",
+                  "pm.test(\"an email with a magic link was captured\", () => pm.expect(link).to.be.an(\"array\"));",
+                  "pm.test(\"the cooldown sent a single email for two requests\", () => pm.expect(pm.response.json().messages.filter((m) => m.Destination.ToAddresses.includes(email))).to.have.lengthOf(1));",
+                  "const [, path, token] = link[0].match(/^https?:\\/\\/[^/]+(\\/[^?]*)\\?.*token=([0-9a-f]{64})/);",
+                  "pm.test(\"the link points to the frontend callback\", () => pm.expect(path).to.eql(\"/auth/callback\"));",
+                  "pm.collectionVariables.set(\"token\", token);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "POST /auth/verify",
+      "item": [
+        {
+          "name": "400 - token has an invalid format",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{email}}\", \"token\": \"short\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"explains the validation error\", () => {",
+                  "  pm.expect(body.message).to.eql(\"Invalid request\");",
+                  "  pm.expect(body.errors.map((e) => e.field)).to.include(\"token\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 - token in uppercase hex",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{email}}\", \"token\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"is a validation error\", () => pm.expect(pm.response.json().message).to.eql(\"Invalid request\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - email without an account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"nobody-{{$timestamp}}@example.com\", \"token\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"does not reveal why\", () => pm.expect(pm.response.json()).to.eql({ message: \"Invalid or expired magic link\" }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - wrong token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{email}}\", \"token\": \"0000000000000000000000000000000000000000000000000000000000000000\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"does not reveal why\", () => pm.expect(pm.response.json()).to.eql({ message: \"Invalid or expired magic link\" }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 - exchanges the link for JWTs (email in another case)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{emailUpper}}\", \"token\": \"{{token}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"emailUpper\", pm.collectionVariables.get(\"email\").toUpperCase());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"is never cached\", () => pm.expect(pm.response.headers.get(\"Cache-Control\")).to.eql(\"no-store\"));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"returns Cognito tokens\", () => {",
+                  "  pm.expect(body.idToken.split(\".\")).to.have.lengthOf(3);",
+                  "  pm.expect(body.accessToken).to.be.a(\"string\");",
+                  "  pm.expect(body.tokenType).to.eql(\"Bearer\");",
+                  "  pm.expect(body.expiresIn).to.be.above(0);",
+                  "});",
+                  "pm.collectionVariables.set(\"idToken\", body.idToken);",
+                  "pm.collectionVariables.set(\"accessToken\", body.accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - a link works only once",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"{{email}}\", \"token\": \"{{token}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "GET /me",
+      "item": [
+        {
+          "name": "200 - returns the verified claims",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{idToken}}"
+              }
+            ],
+            "url": "{{apiUrl}}/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 200\", () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"returns the signed-in user\", () => {",
+                  "  pm.expect(body.email).to.eql(pm.collectionVariables.get(\"email\"));",
+                  "  pm.expect(body.sub).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiUrl}}/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - forged token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.invalid"
+              }
+            ],
+            "url": "{{apiUrl}}/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - access token instead of ID token",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{accessToken}}"
+              }
+            ],
+            "url": "{{apiUrl}}/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

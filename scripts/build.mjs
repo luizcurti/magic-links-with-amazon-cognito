@@ -1,7 +1,8 @@
 // Bundles every Lambda into its own self-contained file: dist/<name>/index.js
 // Terraform zips each folder, so each function ships only the code it uses.
-import { build } from "esbuild";
+
 import { rm } from "node:fs/promises";
+import { build } from "esbuild";
 
 const functions = {
   login: "apps/api/src/handlers/login.ts",

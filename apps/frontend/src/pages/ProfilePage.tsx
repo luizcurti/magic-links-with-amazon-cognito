@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, type Profile } from "../api";
+import { ApiError, api, type Profile } from "../api";
 import { navigate } from "../router";
 import { session } from "../session";
 
@@ -14,7 +14,7 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> {
 }
 
 export function ProfilePage() {
-  const tokens = session.load();
+  const [tokens] = useState(session.load);
   const [profile, setProfile] = useState<Profile>();
   const [error, setError] = useState<string>();
 
@@ -34,7 +34,7 @@ export function ProfilePage() {
           setError((err as Error).message);
         }
       });
-  }, []);
+  }, [tokens]);
 
   if (!tokens) return null;
 
@@ -62,7 +62,7 @@ export function ProfilePage() {
       <h2>ID token claims</h2>
       <pre>{JSON.stringify(claims, null, 2)}</pre>
 
-      <button className="secondary" onClick={signOut}>
+      <button type="button" className="secondary" onClick={signOut}>
         Sign out
       </button>
     </>

@@ -1,0 +1,20 @@
+flowchart LR
+    subgraph Dev["Developer machine / GitHub Actions runner"]
+        TF["Terraform<br/>infrastructure/terraform"]
+        ESB["esbuild<br/>dist/&lt;fn&gt;/index.js"]
+        VITE["Vite dev server :5173<br/>/api proxy"]
+        TESTS["Vitest integration<br/>+ newman collection"]
+    end
+
+    subgraph Docker["Docker"]
+        subgraph Compose["docker compose"]
+            LS["LocalStack :4566<br/>API GW · Lambda · Cognito · DynamoDB<br/>SES · KMS · IAM · CloudWatch Logs"]
+        end
+        FN["Lambda runtime containers<br/>(siblings on network magic-links)"]
+    end
+
+    ESB -- "zip" --> TF
+    TF -- "apply (AWS APIs)" --> LS
+    LS -- "docker.sock" --> FN
+    VITE -- "HTTP" --> LS
+    TESTS -- "HTTP + /_aws/ses" --> LS

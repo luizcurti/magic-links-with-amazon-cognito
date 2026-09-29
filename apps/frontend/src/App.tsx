@@ -1,7 +1,7 @@
-import { usePathname } from "./router";
 import { CallbackPage } from "./pages/CallbackPage";
 import { LoginPage } from "./pages/LoginPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { usePathname } from "./router";
 
 export function App() {
   const pathname = usePathname();

@@ -62,3 +62,32 @@ variable "lambda_dist_dir" {
   type        = string
   default     = "../../dist"
 }
+
+variable "log_retention_days" {
+  description = "Retention for Lambda and API Gateway access logs."
+  type        = number
+  default     = 14
+}
+
+variable "api_throttle_rate_limit" {
+  description = "Steady-state requests per second allowed across the API stage."
+  type        = number
+  default     = 10
+}
+
+variable "api_throttle_burst_limit" {
+  description = "Maximum concurrent request burst allowed across the API stage."
+  type        = number
+  default     = 20
+}
+
+variable "magic_link_cooldown_seconds" {
+  description = "Minimum time between two magic links for the same email (email-bombing protection)."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.magic_link_cooldown_seconds >= 1 && var.magic_link_cooldown_seconds <= 3600
+    error_message = "magic_link_cooldown_seconds must be between 1 and 3600."
+  }
+}

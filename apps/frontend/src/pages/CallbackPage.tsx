@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type AuthTokens } from "../api";
+import { type AuthTokens, api } from "../api";
 import { navigate } from "../router";
 import { session } from "../session";
 
@@ -18,13 +18,19 @@ function verifyOnce(email: string, token: string): Promise<AuthTokens> {
   return promise;
 }
 
+function readLinkParams() {
+  const params = new URLSearchParams(window.location.search);
+  return { email: params.get("email"), token: params.get("token") };
+}
+
 export function CallbackPage() {
+  // Read once into state: the effect below removes them from the URL.
+  const [{ email, token }] = useState(readLinkParams);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const email = params.get("email");
-    const token = params.get("token");
+    // Drop the token from the address bar and browser history, whatever the outcome.
+    window.history.replaceState({}, "", "/auth/callback");
 
     if (!email || !token) {
       setError("This link is incomplete. Please request a new one.");
@@ -36,8 +42,6 @@ export function CallbackPage() {
       .then((tokens) => {
         if (cancelled) return;
         session.save(tokens);
-        // Drop the token from the address bar and browser history.
-        window.history.replaceState({}, "", "/auth/callback");
         navigate("/profile");
       })
       .catch(() => {
@@ -47,14 +51,16 @@ export function CallbackPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [email, token]);
 
   if (error) {
     return (
       <>
         <h1>Sign-in failed</h1>
         <p className="error">{error}</p>
-        <button onClick={() => navigate("/")}>Request a new link</button>
+        <button type="button" onClick={() => navigate("/")}>
+          Request a new link
+        </button>
       </>
     );
   }
@@ -63,7 +69,7 @@ export function CallbackPage() {
     <>
       <h1>Signing you in…</h1>
       <p>Verifying your magic link with Cognito.</p>
-      <div className="spinner" aria-label="Loading" />
+      <div className="spinner" role="status" aria-label="Loading" />
     </>
   );
 }

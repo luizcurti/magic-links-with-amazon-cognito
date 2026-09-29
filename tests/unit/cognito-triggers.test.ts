@@ -1,17 +1,17 @@
-import { mockClient } from "aws-sdk-client-mock";
-import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import type {
   Context,
   CreateAuthChallengeTriggerEvent,
   DefineAuthChallengeTriggerEvent,
   VerifyAuthChallengeResponseTriggerEvent,
 } from "aws-lambda";
+import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
+import { hashToken } from "../../apps/api/src/services/token.service.js";
 import { handler as createAuthChallenge } from "../../apps/cognito/triggers/create-auth-challenge.js";
 import { handler as defineAuthChallenge, MAX_ATTEMPTS } from "../../apps/cognito/triggers/define-auth-challenge.js";
 import { handler as verifyAuthChallenge } from "../../apps/cognito/triggers/verify-auth-challenge.js";
-import { hashToken } from "../../apps/api/src/services/token.service.js";
 
 const EMAIL = "luiz@example.com";
 const TOKEN = "ab".repeat(32);
@@ -36,7 +36,11 @@ const attempt = (challengeResult: boolean) => ({
 describe("DefineAuthChallenge", () => {
   it("starts with a custom challenge", async () => {
     const result = (await defineAuthChallenge(defineEvent([]), context, callback))!;
-    expect(result.response).toEqual({ issueTokens: false, failAuthentication: false, challengeName: "CUSTOM_CHALLENGE" });
+    expect(result.response).toEqual({
+      issueTokens: false,
+      failAuthentication: false,
+      challengeName: "CUSTOM_CHALLENGE",
+    });
   });
 
   it("issues tokens after a correct answer", async () => {
@@ -81,6 +85,16 @@ describe("CreateAuthChallenge", () => {
       challengeMetadata: "MAGIC_LINK",
     });
   });
+
+  it("falls back to an empty email when the user has none", async () => {
+    const event = {
+      request: { userAttributes: {}, challengeName: "CUSTOM_CHALLENGE", session: [] },
+      response: {},
+    } as unknown as CreateAuthChallengeTriggerEvent;
+
+    const result = (await createAuthChallenge(event, context, callback))!;
+    expect(result.response.publicChallengeParameters).toEqual({ email: "" });
+  });
 });
 
 describe("VerifyAuthChallengeResponse", () => {
@@ -100,7 +114,14 @@ describe("VerifyAuthChallengeResponse", () => {
 
   it("accepts a valid token and consumes it", async () => {
     dynamo.on(GetCommand).resolves({
-      Item: { pk: `EMAIL#${EMAIL}`, email: EMAIL, tokenHash: hashToken(TOKEN), createdAt: now, expiresAt: now + 600, used: false },
+      Item: {
+        pk: `EMAIL#${EMAIL}`,
+        email: EMAIL,
+        tokenHash: hashToken(TOKEN),
+        createdAt: now,
+        expiresAt: now + 600,
+        used: false,
+      },
     });
     dynamo.on(UpdateCommand).resolves({});
 
@@ -114,7 +135,14 @@ describe("VerifyAuthChallengeResponse", () => {
 
   it("rejects when the atomic consume loses a race", async () => {
     dynamo.on(GetCommand).resolves({
-      Item: { pk: `EMAIL#${EMAIL}`, email: EMAIL, tokenHash: hashToken(TOKEN), createdAt: now, expiresAt: now + 600, used: false },
+      Item: {
+        pk: `EMAIL#${EMAIL}`,
+        email: EMAIL,
+        tokenHash: hashToken(TOKEN),
+        createdAt: now,
+        expiresAt: now + 600,
+        used: false,
+      },
     });
     dynamo.on(UpdateCommand).rejects(new ConditionalCheckFailedException({ message: "failed", $metadata: {} }));
 

@@ -16,3 +16,11 @@ infrastructure/terraform/tfplan
 
 # Frontend
 apps/frontend/dist/
+
+# Local tool settings
+claude/
+.claude/settings.local.json
+
+# Playwright
+test-results/
+playwright-report/

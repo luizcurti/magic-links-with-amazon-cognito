@@ -5,70 +5,102 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Typecheck, unit tests & build
+  quality:
+    name: Lint, typecheck, unit tests & build
     runs-on: ubuntu-latest
+    outputs:
+      has-localstack-token: ${{ steps.localstack-token.outputs.present }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Security audit
+        run: npm audit --audit-level=high
+      - run: npm run lint
       - run: npm run typecheck
-      - run: npm run test:coverage
-      - run: npm run build
-      - run: npm run build -w apps/frontend
+      - name: Unit tests (backend + frontend, 100% coverage required)
+        run: npm run test:coverage
+      - name: Build Lambdas
+        run: npm run build
+      - name: Build frontend
+        run: npm run build -w apps/frontend
+      - id: localstack-token
+        name: Check for a LocalStack token
+        run: echo "present=${{ secrets.LOCALSTACK_AUTH_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
 
   terraform:
-    name: Terraform fmt & validate
+    name: Terraform fmt, validate & static analysis
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infrastructure/terraform
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-      - run: terraform -chdir=infrastructure/terraform fmt -check -recursive
-      - run: terraform -chdir=infrastructure/terraform init -backend=false -input=false
-      - run: terraform -chdir=infrastructure/terraform validate
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - uses: terraform-linters/setup-tflint@v6
+      - run: tflint --init && tflint --format compact
+      - name: Checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infrastructure/terraform
+          config_file: infrastructure/terraform/.checkov.yaml
 
   integration:
-    name: Integration tests (LocalStack)
+    name: Integration, API & browser E2E tests (LocalStack)
     runs-on: ubuntu-latest
-    needs: [test, terraform]
+    needs: [quality, terraform]
+    # Cognito needs a LocalStack license, which forks and fresh clones do not have.
+    if: needs.quality.outputs.has-localstack-token == 'true'
     env:
       LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
     steps:
-      - name: Skip when no LocalStack token is configured
-        if: env.LOCALSTACK_AUTH_TOKEN == ''
-        run: echo "::notice::Set the LOCALSTACK_AUTH_TOKEN secret to run integration tests."
-      - uses: actions/checkout@v4
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
-      - uses: actions/setup-node@v4
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
-      - uses: hashicorp/setup-terraform@v3
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
-      - if: env.LOCALSTACK_AUTH_TOKEN != ''
-        run: npm ci
-      - name: Start LocalStack
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
+      - run: npm ci
+      - name: Start LocalStack (Docker Compose)
         run: |
           echo "LOCALSTACK_AUTH_TOKEN=$LOCALSTACK_AUTH_TOKEN" > .env
           make up
-      - name: Deploy infrastructure
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
+      - name: Deploy infrastructure with Terraform
         run: make infra
-      - name: Run integration tests
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
+      - name: Integration tests
         run: npm run test:integration
+      - name: API collection tests
+        run: npm run test:api
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+      - name: Browser E2E tests
+        run: npm run test:e2e
+      - name: Terminal demo (smoke test)
+        run: make demo EMAIL=ci@example.com
       - name: LocalStack logs
-        if: failure() && env.LOCALSTACK_AUTH_TOKEN != ''
+        if: failure()
         run: docker compose logs localstack | tail -200
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/

@@ -17,5 +17,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["apps/api/src", "apps/cognito", "tests", "scripts", "vitest.config.ts"]
+  "include": ["apps/api/src", "apps/cognito", "tests", "scripts", "vitest.config.ts", "playwright.config.ts"]
 }

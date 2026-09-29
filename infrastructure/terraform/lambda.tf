@@ -8,6 +8,15 @@ locals {
   })
 }
 
+# Created explicitly so retention is managed; Lambda would otherwise create
+# them on first invocation with logs kept forever.
+resource "aws_cloudwatch_log_group" "lambda" {
+  for_each = local.lambda_roles
+
+  name              = "/aws/lambda/${local.name}-${each.key}"
+  retention_in_days = var.log_retention_days
+}
+
 data "archive_file" "lambda" {
   for_each = local.lambda_roles
 
@@ -30,6 +39,12 @@ resource "aws_lambda_function" "define_auth_challenge" {
   timeout          = 5
   memory_size      = 128
 
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+
   environment {
     variables = local.common_env
   }
@@ -45,6 +60,12 @@ resource "aws_lambda_function" "create_auth_challenge" {
   timeout          = 5
   memory_size      = 128
 
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+
   environment {
     variables = local.common_env
   }
@@ -59,6 +80,12 @@ resource "aws_lambda_function" "verify_auth_challenge" {
   source_code_hash = data.archive_file.lambda["verify-auth-challenge"].output_base64sha256
   timeout          = 5
   memory_size      = 256
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 
   environment {
     variables = merge(local.common_env, {
@@ -81,14 +108,21 @@ resource "aws_lambda_function" "login" {
   timeout          = 10
   memory_size      = 256
 
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+
   environment {
     variables = merge(local.api_env, {
-      USER_POOL_ID            = aws_cognito_user_pool.main.id
-      USER_POOL_CLIENT_ID     = aws_cognito_user_pool_client.web.id
-      MAGIC_LINKS_TABLE       = aws_dynamodb_table.magic_links.name
-      SES_FROM_ADDRESS        = aws_ses_email_identity.sender.email
-      MAGIC_LINK_CALLBACK_URL = var.magic_link_callback_url
-      MAGIC_LINK_TTL_SECONDS  = tostring(var.magic_link_ttl_seconds)
+      USER_POOL_ID                = aws_cognito_user_pool.main.id
+      USER_POOL_CLIENT_ID         = aws_cognito_user_pool_client.web.id
+      MAGIC_LINKS_TABLE           = aws_dynamodb_table.magic_links.name
+      SES_FROM_ADDRESS            = aws_ses_email_identity.sender.email
+      MAGIC_LINK_CALLBACK_URL     = var.magic_link_callback_url
+      MAGIC_LINK_TTL_SECONDS      = tostring(var.magic_link_ttl_seconds)
+      MAGIC_LINK_COOLDOWN_SECONDS = tostring(var.magic_link_cooldown_seconds)
     })
   }
 }
@@ -102,6 +136,12 @@ resource "aws_lambda_function" "auth_callback" {
   source_code_hash = data.archive_file.lambda["auth-callback"].output_base64sha256
   timeout          = 15
   memory_size      = 256
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 
   environment {
     variables = merge(local.api_env, {
@@ -120,6 +160,12 @@ resource "aws_lambda_function" "me" {
   source_code_hash = data.archive_file.lambda["me"].output_base64sha256
   timeout          = 5
   memory_size      = 128
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
 
   environment {
     variables = local.api_env

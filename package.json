@@ -15,25 +15,34 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit && npm run typecheck -w apps/frontend",
-    "test": "vitest run tests/unit",
-    "test:unit": "vitest run tests/unit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "test": "vitest run tests/unit apps/frontend",
+    "test:unit": "vitest run tests/unit apps/frontend",
     "test:integration": "vitest run tests/integration",
-    "test:coverage": "vitest run tests/unit --coverage",
-    "dev:frontend": "npm run dev -w apps/frontend"
+    "test:api": "npx --yes newman@6.2.2 run api/magic-links.postman_collection.json --bail --delay-request 300 --env-var apiUrl=$(terraform -chdir=infrastructure/terraform output -raw api_url)",
+    "test:coverage": "vitest run tests/unit apps/frontend --coverage",
+    "dev:frontend": "npm run dev -w apps/frontend",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@aws-sdk/client-cognito-identity-provider": "^3.1140.0",
-    "@aws-sdk/client-dynamodb": "^3.1140.0",
-    "@aws-sdk/client-ses": "^3.1140.0",
-    "@aws-sdk/lib-dynamodb": "^3.1140.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1143.0",
+    "@aws-sdk/client-dynamodb": "^3.1143.0",
+    "@aws-sdk/client-ses": "^3.1143.0",
+    "@aws-sdk/lib-dynamodb": "^3.1143.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.163",
-    "@types/node": "^26.6.2",
+    "@biomejs/biome": "2.5.14",
+    "@playwright/test": "^1.63.0",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/aws-lambda": "^8.10.164",
+    "@types/node": "^22.20.4",
     "@vitest/coverage-v8": "^5.0.2",
     "aws-sdk-client-mock": "^4.1.0",
     "esbuild": "^0.28.2",
+    "happy-dom": "^20.14.5",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2"
   }

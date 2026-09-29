@@ -1,4 +1,4 @@
-import { SendEmailCommand, type SESClient } from "@aws-sdk/client-ses";
+import { type SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 
 export interface MagicLinkEmail {
   to: string;

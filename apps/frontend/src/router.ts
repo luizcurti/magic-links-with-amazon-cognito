@@ -12,6 +12,9 @@ export function usePathname(): string {
   useEffect(() => {
     const onChange = () => setPathname(window.location.pathname);
     window.addEventListener("popstate", onChange);
+    // Child effects run before this one, so a page may already have navigated
+    // (e.g. ProfilePage redirecting a signed-out visitor) before we subscribed.
+    onChange();
     return () => window.removeEventListener("popstate", onChange);
   }, []);
 

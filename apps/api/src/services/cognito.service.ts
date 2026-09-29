@@ -1,11 +1,13 @@
+import { randomBytes } from "node:crypto";
 import {
   AdminCreateUserCommand,
+  AdminSetUserPasswordCommand,
+  type CognitoIdentityProviderClient,
   InitiateAuthCommand,
   NotAuthorizedException,
   RespondToAuthChallengeCommand,
-  UsernameExistsException,
   UserNotFoundException,
-  type CognitoIdentityProviderClient,
+  UsernameExistsException,
 } from "@aws-sdk/client-cognito-identity-provider";
 
 export interface AuthTokens {
@@ -36,6 +38,11 @@ export class CognitoService {
    * Uses create-and-catch instead of get-then-create to avoid a race and an
    * extra round trip. MessageAction=SUPPRESS stops Cognito from sending its
    * own invitation email — our magic link is the only email the user gets.
+   *
+   * AdminCreateUser leaves the user in FORCE_CHANGE_PASSWORD, and Cognito does
+   * not let such users sign in until they set a password. Setting a random
+   * permanent one moves the user to CONFIRMED. Nobody ever knows it, and the
+   * app client only allows CUSTOM_AUTH, so it can never be used to sign in.
    */
   async ensureUser(email: string): Promise<void> {
     try {
@@ -51,6 +58,15 @@ export class CognitoService {
       if (error instanceof UsernameExistsException) return;
       throw error;
     }
+
+    await this.client.send(
+      new AdminSetUserPasswordCommand({
+        UserPoolId: this.userPoolId,
+        Username: email,
+        Password: unusablePassword(),
+        Permanent: true,
+      }),
+    );
   }
 
   /**
@@ -111,4 +127,9 @@ export class CognitoService {
       throw error;
     }
   }
+}
+
+/** 32 random bytes plus one character of each class, to satisfy any password policy. */
+function unusablePassword(): string {
+  return `${randomBytes(32).toString("base64url")}Aa1!`;
 }

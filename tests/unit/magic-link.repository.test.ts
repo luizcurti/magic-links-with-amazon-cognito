@@ -1,6 +1,6 @@
-import { mockClient } from "aws-sdk-client-mock";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
 import { emailKey, MagicLinkRepository } from "../../apps/api/src/repositories/magic-link.repository.js";
 
@@ -14,16 +14,41 @@ describe("MagicLinkRepository", () => {
     expect(emailKey("luiz@example.com")).toBe("EMAIL#luiz@example.com");
   });
 
-  it("saves a new unused link, overwriting any previous one", async () => {
+  it("saves a new unused link unless a recent unused one exists", async () => {
     dynamo.on(PutCommand).resolves({});
-    await repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 1, expiresAt: 601 });
+    await expect(
+      repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40),
+    ).resolves.toBe(true);
 
     const input = dynamo.commandCalls(PutCommand)[0]!.args[0].input;
     expect(input).toEqual({
       TableName: "magic-links",
-      Item: { pk: "EMAIL#luiz@example.com", email: "luiz@example.com", tokenHash: "h", createdAt: 1, expiresAt: 601, used: false },
+      Item: {
+        pk: "EMAIL#luiz@example.com",
+        email: "luiz@example.com",
+        tokenHash: "h",
+        createdAt: 100,
+        expiresAt: 700,
+        used: false,
+      },
+      ConditionExpression: "attribute_not_exists(pk) OR #used = :true OR createdAt <= :cooldownStart",
+      ExpressionAttributeNames: { "#used": "used" },
+      ExpressionAttributeValues: { ":true": true, ":cooldownStart": 40 },
     });
-    expect(input.ConditionExpression).toBeUndefined();
+  });
+
+  it("reports a save blocked by the cooldown", async () => {
+    dynamo.on(PutCommand).rejects(new ConditionalCheckFailedException({ message: "failed", $metadata: {} }));
+    await expect(
+      repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40),
+    ).resolves.toBe(false);
+  });
+
+  it("propagates unexpected errors when saving", async () => {
+    dynamo.on(PutCommand).rejects(new Error("boom"));
+    await expect(
+      repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40),
+    ).rejects.toThrow("boom");
   });
 
   it("reads with strong consistency", async () => {

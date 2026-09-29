@@ -3,7 +3,7 @@ TF    := terraform -chdir=infrastructure/terraform
 EMAIL ?= luiz@example.com
 
 .DEFAULT_GOAL := help
-.PHONY: help install up down logs build infra destroy outputs env login emails link verify demo frontend test test-integration typecheck check clean
+.PHONY: help install up down logs build infra destroy outputs env login emails link verify demo frontend test test-integration test-api test-e2e lint typecheck tf-scan check clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -65,18 +65,31 @@ demo: ## Full flow from the terminal: login -> email -> JWT -> /me
 frontend: ## Start the React frontend on http://localhost:5173
 	npm run dev:frontend
 
-test: ## Run unit tests
+test: ## Run unit tests (backend + frontend)
 	npm test
 
 test-integration: ## Run integration tests against LocalStack
 	npm run test:integration
 
+test-api: ## Run the Postman collection against LocalStack (newman)
+	npm run test:api
+
+test-e2e: ## Run browser E2E tests (Playwright) against LocalStack
+	npm run test:e2e
+
+lint: ## Lint and format-check with Biome
+	npm run lint
+
 typecheck: ## Type-check backend and frontend
 	npm run typecheck
 
-check: typecheck test ## Typecheck, unit tests and Terraform validation
+tf-scan: ## Static analysis for Terraform (needs tflint and checkov installed)
+	cd infrastructure/terraform && tflint --init >/dev/null && tflint --format compact
+	checkov -d infrastructure/terraform --config-file infrastructure/terraform/.checkov.yaml
+
+check: lint typecheck test ## Lint, typecheck, unit tests and Terraform validation
 	$(TF) fmt -check -recursive
 	$(TF) validate
 
 clean: ## Remove build artifacts
-	rm -rf dist coverage apps/frontend/dist infrastructure/terraform/.build
+	rm -rf dist coverage apps/frontend/dist infrastructure/terraform/.build test-results playwright-report

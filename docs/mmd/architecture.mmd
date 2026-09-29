@@ -1,0 +1,38 @@
+flowchart TB
+    FE["Frontend<br/>React + Vite"]
+    APIGW["API Gateway (REST)<br/>throttling · JSON access logs · X-Ray"]
+
+    subgraph Lambdas
+        LOGIN["λ login"]
+        VERIFY["λ auth-callback"]
+        ME["λ me"]
+    end
+
+    subgraph Cognito["Cognito User Pool · CUSTOM_AUTH"]
+        DEFINE["λ DefineAuthChallenge"]
+        CREATE["λ CreateAuthChallenge"]
+        CHECK["λ VerifyAuthChallengeResponse"]
+    end
+
+    DDB[("DynamoDB<br/>tokenHash · expiresAt · used")]
+    KMS["KMS<br/>CMK"]
+    SES["SES<br/>(captured locally)"]
+    CW["CloudWatch Logs<br/>14-day retention"]
+
+    FE -- "POST /login" --> APIGW
+    FE -- "POST /auth/verify" --> APIGW
+    FE -- "GET /me + JWT" --> APIGW
+
+    APIGW --> LOGIN
+    APIGW --> VERIFY
+    APIGW -- "Cognito authorizer" --> ME
+
+    LOGIN -- "AdminCreateUser" --> Cognito
+    LOGIN -- "save hash" --> DDB
+    LOGIN -- "send link" --> SES
+
+    VERIFY -- "InitiateAuth /<br/>RespondToAuthChallenge" --> Cognito
+    CHECK -- "validate + consume" --> DDB
+    KMS -. "encrypts" .-> DDB
+    Lambdas -. "logs" .-> CW
+    APIGW -. "access logs" .-> CW

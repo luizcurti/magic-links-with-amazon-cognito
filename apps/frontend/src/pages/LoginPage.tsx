@@ -1,7 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { type FormEvent, useState } from "react";
 import { api } from "../api";
 
-type State = { status: "idle" } | { status: "sending" } | { status: "sent"; email: string } | { status: "error"; message: string };
+type State =
+  | { status: "idle" }
+  | { status: "sending" }
+  | { status: "sent"; email: string }
+  | { status: "error"; message: string };
 
 export function LoginPage() {
   const [email, setEmail] = useState("");
@@ -28,7 +32,7 @@ export function LoginPage() {
         <p className="hint">
           Running locally? The email was captured by LocalStack SES. Run <code>make emails</code> to see it.
         </p>
-        <button className="secondary" onClick={() => setState({ status: "idle" })}>
+        <button type="button" className="secondary" onClick={() => setState({ status: "idle" })}>
           Use a different email
         </button>
       </>

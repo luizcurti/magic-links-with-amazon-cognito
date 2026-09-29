@@ -17,10 +17,15 @@ export interface MagicLinkServiceOptions {
   /** Frontend route that receives `?email=...&token=...`. */
   callbackUrl?: string;
   ttlSeconds?: number;
+  /** Minimum time between two links for the same email, against email bombing. */
+  cooldownSeconds?: number;
   now?: () => Date;
 }
 
+export type IssueResult = { status: "SENT"; expiresAt: number } | { status: "COOLDOWN" };
+
 export const DEFAULT_TTL_SECONDS = 10 * 60;
+export const DEFAULT_COOLDOWN_SECONDS = 60;
 
 const toEpochSeconds = (date: Date): number => Math.floor(date.getTime() / 1000);
 
@@ -48,6 +53,7 @@ export class MagicLinkService {
   private readonly emailSender: EmailSender | undefined;
   private readonly callbackUrl: string | undefined;
   private readonly ttlSeconds: number;
+  private readonly cooldownSeconds: number;
   private readonly now: () => Date;
 
   constructor(options: MagicLinkServiceOptions) {
@@ -55,14 +61,18 @@ export class MagicLinkService {
     this.emailSender = options.emailSender;
     this.callbackUrl = options.callbackUrl;
     this.ttlSeconds = options.ttlSeconds ?? DEFAULT_TTL_SECONDS;
+    this.cooldownSeconds = options.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS;
     this.now = options.now ?? (() => new Date());
   }
 
   /**
    * Issues a new single-use link. The plaintext token exists only in memory
    * and in the email; the database only ever sees its hash.
+   *
+   * Within the cooldown window nothing is stored or sent, so a flood of
+   * requests for someone else's address produces at most one email.
    */
-  async requestMagicLink(email: string): Promise<{ expiresAt: number }> {
+  async requestMagicLink(email: string): Promise<IssueResult> {
     if (!this.emailSender || !this.callbackUrl) {
       throw new Error("MagicLinkService needs an emailSender and callbackUrl to issue links");
     }
@@ -71,14 +81,19 @@ export class MagicLinkService {
     const createdAt = toEpochSeconds(this.now());
     const expiresAt = createdAt + this.ttlSeconds;
 
-    await this.repository.save({ email, tokenHash: hashToken(token), createdAt, expiresAt });
+    const saved = await this.repository.save(
+      { email, tokenHash: hashToken(token), createdAt, expiresAt },
+      createdAt - this.cooldownSeconds,
+    );
+    if (!saved) return { status: "COOLDOWN" };
+
     await this.emailSender.sendMagicLink({
       to: email,
       magicLink: buildMagicLink(this.callbackUrl, email, token),
       expiresInMinutes: Math.round(this.ttlSeconds / 60),
     });
 
-    return { expiresAt };
+    return { status: "SENT", expiresAt };
   }
 
   /**

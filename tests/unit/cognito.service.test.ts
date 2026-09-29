@@ -1,12 +1,14 @@
-import { mockClient } from "aws-sdk-client-mock";
 import {
   AdminCreateUserCommand,
+  AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
   InitiateAuthCommand,
   NotAuthorizedException,
   RespondToAuthChallengeCommand,
+  UserNotFoundException,
   UsernameExistsException,
 } from "@aws-sdk/client-cognito-identity-provider";
+import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
 import { AuthenticationError, CognitoService } from "../../apps/api/src/services/cognito.service.js";
 
@@ -31,9 +33,33 @@ describe("CognitoService", () => {
       });
     });
 
-    it("is idempotent for existing users", async () => {
+    it("confirms a new user with a random, unshared permanent password", async () => {
+      cognito.on(AdminCreateUserCommand).resolves({});
+      cognito.on(AdminSetUserPasswordCommand).resolves({});
+      await service.ensureUser(EMAIL);
+      await service.ensureUser("other@example.com");
+
+      const [first, second] = cognito.commandCalls(AdminSetUserPasswordCommand).map((call) => call.args[0].input);
+      expect(first).toMatchObject({ UserPoolId: "pool-id", Username: EMAIL, Permanent: true });
+      expect(first?.Password).toMatch(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w]).{40,}$/);
+      expect(first?.Password).not.toBe(second?.Password);
+    });
+
+    it("is idempotent for existing users and leaves their account untouched", async () => {
       cognito.on(AdminCreateUserCommand).rejects(new UsernameExistsException({ message: "exists", $metadata: {} }));
       await expect(service.ensureUser(EMAIL)).resolves.toBeUndefined();
+      expect(cognito.commandCalls(AdminSetUserPasswordCommand)).toHaveLength(0);
+    });
+
+    it("fails when the new user cannot be confirmed", async () => {
+      cognito.on(AdminCreateUserCommand).resolves({});
+      cognito.on(AdminSetUserPasswordCommand).rejects(new Error("password rejected"));
+      await expect(service.ensureUser(EMAIL)).rejects.toThrow("password rejected");
+    });
+
+    it("propagates unexpected Cognito errors", async () => {
+      cognito.on(AdminCreateUserCommand).rejects(new Error("throttled"));
+      await expect(service.ensureUser(EMAIL)).rejects.toThrow("throttled");
     });
   });
 
@@ -48,7 +74,13 @@ describe("CognitoService", () => {
 
     it("runs CUSTOM_AUTH and returns the JWTs", async () => {
       cognito.on(RespondToAuthChallengeCommand).resolves({
-        AuthenticationResult: { IdToken: "id", AccessToken: "access", RefreshToken: "refresh", ExpiresIn: 3600, TokenType: "Bearer" },
+        AuthenticationResult: {
+          IdToken: "id",
+          AccessToken: "access",
+          RefreshToken: "refresh",
+          ExpiresIn: 3600,
+          TokenType: "Bearer",
+        },
       });
 
       await expect(service.signInWithMagicLink(EMAIL, TOKEN)).resolves.toEqual({
@@ -80,6 +112,33 @@ describe("CognitoService", () => {
     it("maps NotAuthorizedException to AuthenticationError", async () => {
       cognito.on(RespondToAuthChallengeCommand).rejects(new NotAuthorizedException({ message: "no", $metadata: {} }));
       await expect(service.signInWithMagicLink(EMAIL, TOKEN)).rejects.toBeInstanceOf(AuthenticationError);
+    });
+
+    it("maps UserNotFoundException to AuthenticationError", async () => {
+      cognito.on(InitiateAuthCommand).rejects(new UserNotFoundException({ message: "no user", $metadata: {} }));
+      await expect(service.signInWithMagicLink(EMAIL, TOKEN)).rejects.toBeInstanceOf(AuthenticationError);
+    });
+
+    it("tolerates minimal Cognito responses", async () => {
+      cognito.on(InitiateAuthCommand).resolves({ ChallengeName: "CUSTOM_CHALLENGE", Session: "session-1" });
+      cognito.on(RespondToAuthChallengeCommand).resolves({ AuthenticationResult: { IdToken: "id", AccessToken: "a" } });
+
+      await expect(service.signInWithMagicLink(EMAIL, TOKEN)).resolves.toEqual({
+        idToken: "id",
+        accessToken: "a",
+        refreshToken: undefined,
+        expiresIn: 3600,
+        tokenType: "Bearer",
+      });
+      expect(cognito.commandCalls(RespondToAuthChallengeCommand)[0]?.args[0].input.ChallengeResponses?.USERNAME).toBe(
+        EMAIL,
+      );
+    });
+
+    it("rejects a custom challenge without a session", async () => {
+      cognito.on(InitiateAuthCommand).resolves({ ChallengeName: "CUSTOM_CHALLENGE" });
+      await expect(service.signInWithMagicLink(EMAIL, TOKEN)).rejects.toBeInstanceOf(AuthenticationError);
+      expect(cognito.commandCalls(RespondToAuthChallengeCommand)).toHaveLength(0);
     });
 
     it("rejects unexpected challenge types", async () => {

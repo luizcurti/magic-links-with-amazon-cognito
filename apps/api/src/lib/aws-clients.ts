@@ -1,7 +1,7 @@
 import { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import { SESClient } from "@aws-sdk/client-ses";
+import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 
 /*
  * Clients are created once per Lambda container and reused across invocations.

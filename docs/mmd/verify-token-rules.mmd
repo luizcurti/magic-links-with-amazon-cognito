@@ -1,0 +1,17 @@
+flowchart TD
+    A["VerifyAuthChallengeResponse<br/>email from Cognito, token from client"] --> F{"token is 64 hex chars?"}
+    F -- no --> R1["INVALID_FORMAT"]
+    F -- yes --> G["GetItem EMAIL#email<br/>(strongly consistent)"]
+    G --> N{"record exists?"}
+    N -- no --> R2["NOT_FOUND"]
+    N -- yes --> E{"record.email = email?"}
+    E -- no --> R3["EMAIL_MISMATCH"]
+    E -- yes --> H{"sha256(token) = tokenHash?<br/>(constant time)"}
+    H -- no --> R4["TOKEN_MISMATCH"]
+    H -- yes --> U{"used?"}
+    U -- yes --> R5["ALREADY_USED"]
+    U -- no --> X{"expiresAt > now?"}
+    X -- no --> R6["EXPIRED"]
+    X -- yes --> C["UpdateItem used = true<br/>IF used = false AND tokenHash = :hash AND expiresAt > :now"]
+    C -- condition failed --> R5
+    C -- ok --> V["VALID → answerCorrect = true"]

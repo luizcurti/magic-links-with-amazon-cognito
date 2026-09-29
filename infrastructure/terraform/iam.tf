@@ -35,6 +35,13 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy_attachment" "lambda_xray" {
+  for_each = local.lambda_roles
+
+  role       = aws_iam_role.lambda[each.key].name
+  policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}
+
 # Access to the customer-managed key, only when called through DynamoDB.
 data "aws_iam_policy_document" "table_kms" {
   statement {
@@ -54,7 +61,7 @@ data "aws_iam_policy_document" "login" {
   source_policy_documents = [data.aws_iam_policy_document.table_kms.json]
 
   statement {
-    actions   = ["cognito-idp:AdminCreateUser"]
+    actions   = ["cognito-idp:AdminCreateUser", "cognito-idp:AdminSetUserPassword"]
     resources = [aws_cognito_user_pool.main.arn]
   }
 

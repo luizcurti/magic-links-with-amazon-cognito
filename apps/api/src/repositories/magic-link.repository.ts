@@ -1,5 +1,5 @@
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { GetCommand, PutCommand, UpdateCommand, type DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { type DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 /**
  * One item per email address. Requesting a new link overwrites the previous
@@ -28,10 +28,31 @@ export class MagicLinkRepository {
     private readonly tableName: string,
   ) {}
 
-  async save(link: NewMagicLink): Promise<MagicLinkRecord> {
+  /**
+   * Stores a new link, replacing the previous one, unless the previous link is
+   * still unused and was created after `cooldownStart` (epoch seconds). The
+   * check and the write are one atomic operation, so parallel requests cannot
+   * slip past the cooldown.
+   *
+   * @returns false when the cooldown prevented the write.
+   */
+  async save(link: NewMagicLink, cooldownStart: number): Promise<boolean> {
     const record: MagicLinkRecord = { pk: emailKey(link.email), ...link, used: false };
-    await this.db.send(new PutCommand({ TableName: this.tableName, Item: record }));
-    return record;
+    try {
+      await this.db.send(
+        new PutCommand({
+          TableName: this.tableName,
+          Item: record,
+          ConditionExpression: "attribute_not_exists(pk) OR #used = :true OR createdAt <= :cooldownStart",
+          ExpressionAttributeNames: { "#used": "used" },
+          ExpressionAttributeValues: { ":true": true, ":cooldownStart": cooldownStart },
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) return false;
+      throw error;
+    }
   }
 
   async findByEmail(email: string): Promise<MagicLinkRecord | undefined> {

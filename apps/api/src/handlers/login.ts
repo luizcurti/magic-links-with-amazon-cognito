@@ -7,7 +7,7 @@ import { loginRequestSchema, validate } from "../lib/validation.js";
 import { MagicLinkRepository } from "../repositories/magic-link.repository.js";
 import { CognitoService } from "../services/cognito.service.js";
 import { SesEmailService } from "../services/email.service.js";
-import { DEFAULT_TTL_SECONDS, MagicLinkService } from "../services/magic-link.service.js";
+import { DEFAULT_COOLDOWN_SECONDS, DEFAULT_TTL_SECONDS, MagicLinkService } from "../services/magic-link.service.js";
 
 /**
  * The same response is returned whether or not the email already had an
@@ -34,12 +34,17 @@ export const handler: APIGatewayProxyHandler = async (event) => {
       emailSender: new SesEmailService(getSesClient(), requireEnv("SES_FROM_ADDRESS")),
       callbackUrl: requireEnv("MAGIC_LINK_CALLBACK_URL"),
       ttlSeconds: numberEnv("MAGIC_LINK_TTL_SECONDS", DEFAULT_TTL_SECONDS),
+      cooldownSeconds: numberEnv("MAGIC_LINK_COOLDOWN_SECONDS", DEFAULT_COOLDOWN_SECONDS),
     });
 
     await cognito.ensureUser(email);
-    const { expiresAt } = await magicLinks.requestMagicLink(email);
+    const result = await magicLinks.requestMagicLink(email);
 
-    logger.info("Magic link issued", { email: maskEmail(email), expiresAt });
+    if (result.status === "SENT") {
+      logger.info("Magic link issued", { email: maskEmail(email), expiresAt: result.expiresAt });
+    } else {
+      logger.info("Magic link not sent: cooldown active", { email: maskEmail(email) });
+    }
     return json(202, GENERIC_RESPONSE);
   } catch (error) {
     if (error instanceof BadRequestError) {

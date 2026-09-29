@@ -1,0 +1,26 @@
+# Checks skipped on purpose. Each one is either not applicable to this stack
+# (synchronous, LocalStack-first demo) or would add cost/complexity that the
+# current requirements do not justify. Revisit before a production deployment.
+compact: true
+quiet: true
+framework:
+  - terraform
+skip-check:
+  # Lambda
+  - CKV_AWS_116 # DLQ: every invocation is synchronous (API Gateway, Cognito triggers); DLQs only apply to async invokes.
+  - CKV_AWS_117 # VPC: the functions only call public AWS APIs; a VPC adds NAT/endpoints cost with no security gain.
+  - CKV_AWS_115 # Reserved concurrency: concurrency is bounded by API Gateway stage throttling instead.
+  - CKV_AWS_173 # Env var CMK: environment variables hold only resource names/URLs, never secrets.
+  - CKV_AWS_272 # Code signing: needs AWS Signer profiles; out of scope for a LocalStack deployment.
+  # API Gateway
+  - CKV2_AWS_29 # WAF: not emulated by LocalStack; stage throttling covers basic abuse. Add WAF for production.
+  - CKV2_AWS_51 # Client certificates: the API is called by browsers, not by backends that could hold mTLS certs.
+  - CKV_AWS_59 # Open access: /login and /auth/verify are public by design (they are how users authenticate).
+  - CKV2_AWS_53 # Request validators: request bodies are validated with Zod in the Lambdas (single source of truth).
+  - CKV_AWS_120 # Stage caching: responses are per-user and must never be cached.
+  - CKV_AWS_225 # Method caching: same as above.
+  - CKV_AWS_237 # create_before_destroy on the REST API: the API itself is never replaced; the deployment already uses it.
+  # Logs & KMS
+  - CKV_AWS_158 # Log group CMK: logs contain no tokens and only masked emails.
+  - CKV_AWS_338 # 1-year log retention: retention is a variable (default 14 days) to keep local/dev costs down.
+  - CKV2_AWS_64 # KMS key policy: the default policy delegates to IAM, and every role is scoped with kms:ViaService.

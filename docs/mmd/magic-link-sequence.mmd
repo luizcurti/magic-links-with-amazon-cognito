@@ -1,0 +1,38 @@
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant FE as Frontend
+    participant API as API Gateway + Lambdas
+    participant DB as DynamoDB
+    participant SES as SES
+    participant C as Cognito
+    participant T as Auth triggers
+
+    U->>FE: enters email
+    FE->>API: POST /login {email}
+    API->>C: AdminCreateUser + AdminSetUserPassword (new users only → CONFIRMED)
+    API->>API: token = randomBytes(32)
+    API->>DB: conditional put {tokenHash: sha256(token), expiresAt, used: false}
+    alt previous unused link is younger than the cooldown
+        DB-->>API: ConditionalCheckFailed → nothing stored, no email
+    else
+        API->>SES: email with /auth/callback?email=…&token=…
+    end
+    API-->>FE: 202 (same response for any email, in both cases)
+
+    U->>FE: clicks magic link
+    FE->>API: POST /auth/verify {email, token}
+    API->>C: InitiateAuth(CUSTOM_AUTH)
+    C->>T: DefineAuthChallenge → CUSTOM_CHALLENGE
+    C->>T: CreateAuthChallenge
+    C-->>API: Session
+    API->>C: RespondToAuthChallenge(ANSWER = token)
+    C->>T: VerifyAuthChallengeResponse
+    T->>DB: get → check hash, email, expiry, used
+    T->>DB: conditional update used = true
+    T-->>C: answerCorrect
+    C->>T: DefineAuthChallenge → issueTokens
+    C-->>API: ID / access / refresh tokens
+    API-->>FE: 200 JWTs
+    FE->>API: GET /me (Authorization: ID token)
+    API-->>FE: 200 {sub, email}

@@ -1,9 +1,9 @@
 services:
   localstack:
     container_name: magic-links-localstack
-    # The LocalStack image requires an auth token (the free Hobby plan
-    # is enough). Cognito in particular is not available without one.
-    image: ${LOCALSTACK_IMAGE:-localstack/localstack:latest}
+    # The LocalStack image requires an auth token, and Cognito is only
+    # available on paid plans (not on the free Hobby plan).
+    image: ${LOCALSTACK_IMAGE:-localstack/localstack:2026.08}
     ports:
       - "127.0.0.1:4566:4566"            # LocalStack edge endpoint
       - "127.0.0.1:4510-4559:4510-4559"  # external service ports
