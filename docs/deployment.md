@@ -24,7 +24,7 @@ make infra              # bundle the Lambdas, terraform apply, write apps/fronte
 ✓ KMS key            ✓ DynamoDB table (TTL + CMK encryption)
 ✓ SES identity       ✓ IAM roles (one per Lambda)
 ✓ 9 Lambdas          ✓ Cognito user pool + client + triggers
-✓ SQS queue + DLQ    ✓ API Gateway + Cognito authorizer + per-route throttling
+✓ SQS queue + DLQ    ✓ API Gateway + Cognito authorizer + per-route throttling + CORS
 ✓ AWS WAF (per-IP rate limits, managed rules)
 ✓ CloudWatch log groups (14-day retention) + JSON access logs
 ```

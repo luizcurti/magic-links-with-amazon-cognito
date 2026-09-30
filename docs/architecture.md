@@ -102,7 +102,7 @@ A single DynamoDB item per email. A new link replaces the old one, unless the ol
 │   │   │   ├── login.ts                 # POST /login → queue the request
 │   │   │   ├── send-magic-link.ts       # SQS worker: cooldown, store hash, send email
 │   │   │   ├── auth-callback.ts         # POST /auth/verify → JWTs
-│   │   │   ├── me.ts                    # GET /me (Cognito authorizer)
+│   │   │   ├── me.ts                    # GET /me (Cognito authorizer + JWT verified again)
 │   │   │   ├── refresh.ts               # POST /auth/refresh → new 15-minute tokens
 │   │   │   └── logout.ts                # POST /logout → RevokeToken
 │   │   ├── services/
@@ -113,12 +113,12 @@ A single DynamoDB item per email. A new link replaces the old one, unless the ol
 │   │   │   └── cognito.service.ts       # user provisioning, CUSTOM_AUTH, refresh, revoke
 │   │   ├── repositories/
 │   │   │   └── magic-link.repository.ts # DynamoDB access
-│   │   └── lib/                         # env, http, validation, logging, AWS clients
+│   │   └── lib/                         # env, http, validation, logging, AWS clients, ID token verification
 │   ├── cognito/triggers/
 │   │   ├── define-auth-challenge.ts
 │   │   ├── create-auth-challenge.ts
 │   │   └── verify-auth-challenge.ts
-│   └── frontend/                        # React + Vite (auth.ts: silent token renewal)
+│   └── frontend/                        # React + Vite (auth.ts: silent token renewal, api.ts: API base URL)
 ├── infrastructure/terraform/            # Cognito, Lambda, API GW, WAF, DynamoDB, SES, SQS, KMS, IAM, logs
 ├── api/                                 # Postman collection (API contract tests)
 ├── docs/                                # these guides; mmd/ holds the diagram sources, img/ the renders and the AWS overview

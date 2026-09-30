@@ -19,7 +19,7 @@ Enter your email, click the link you receive, and you get Cognito JWTs. No passw
 - **Scanner-safe links:** parameters in the URL fragment, and nothing happens until the user clicks "Sign in as …?".
 - **Abuse limits:** a per-email cooldown that grows with each unused link (a few emails an hour at most), WAF per-IP limits and per-route throttling; emails go through SQS with retries and a dead-letter queue.
 - **Real sessions:** 15-minute JWTs renewed silently, verified again in the Lambda, and a sign-out that revokes the refresh token.
-- **Tested end to end:** 100% unit coverage, integration tests against LocalStack, a Postman collection, Playwright E2E, and AWS smoke tests.
+- **Tested end to end:** 100% unit coverage, integration tests against LocalStack, a Postman collection, Playwright E2E, and smoke tests ready for a real AWS account.
 
 Details: [Security](docs/security.md).
 

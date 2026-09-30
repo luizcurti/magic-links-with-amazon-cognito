@@ -127,8 +127,8 @@
   <rect x="880" y="500" width="220" height="20" rx="8" fill="#4338ca"/><rect x="880" y="512" width="220" height="8" fill="#4338ca"/>
   <text x="892" y="515" font-size="10" font-weight="700" fill="#fff">AMAZON DYNAMODB</text>
   <text x="892" y="542" font-size="14" font-weight="700" fill="#111827">magic-links-tokens</text>
-  <text x="892" y="562" font-size="12" fill="#4b5563">sha256(token) · expiresAt (TTL)</text>
-  <text x="892" y="578" font-size="12" fill="#4b5563">used</text>
+  <text x="892" y="562" font-size="12" fill="#4b5563">sha256(token) · expiresAt · used</text>
+  <text x="892" y="578" font-size="12" fill="#4b5563">streak · purgeAt (TTL)</text>
 
   <rect x="1130" y="500" width="90" height="90" rx="8" fill="#fff" stroke="#854d0e" stroke-width="1.5"/>
   <rect x="1130" y="500" width="90" height="20" rx="8" fill="#854d0e"/><rect x="1130" y="512" width="90" height="8" fill="#854d0e"/>

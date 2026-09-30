@@ -44,4 +44,4 @@ When no stack is deployed, the integration suite is skipped, so `npm run test:in
 | **terraform** | `fmt -check` → `init -backend=false` → `validate` → tflint → Checkov (skips are justified in [`.checkov.yaml`](../infrastructure/terraform/.checkov.yaml)) |
 | **integration** | Docker Compose LocalStack → `make infra` (Terraform apply) → integration tests → Postman collection → Playwright browser E2E → `make demo` |
 
-The integration job needs a `LOCALSTACK_AUTH_TOKEN` repository secret. Without it (for example on forks) the job is skipped rather than failed, since there is nothing to run against. There is no `terraform plan`/`apply` against a real AWS account because the project only targets LocalStack.
+The integration job needs a `LOCALSTACK_AUTH_TOKEN` repository secret. Without it (for example on forks) the job is skipped rather than failed, since there is nothing to run against. The [AWS smoke tests](deployment.md#deploying-to-real-aws) (`make test-aws`) are not part of CI: they need a real AWS account, cost money, and block `POST /login` from the runner's IP for the WAF window.
