@@ -13,7 +13,7 @@ describe("App routing", () => {
   it.each([
     ["/", "Sign in"],
     ["/unknown", "Sign in"],
-    ["/auth/callback", "Signing you in…"],
+    ["/auth/callback", "Confirm sign-in"],
   ])("renders the page for %s", (path, heading) => {
     window.history.replaceState({}, "", `${path}?email=a%40b.com&token=${"a".repeat(64)}`);
     render(<App />);

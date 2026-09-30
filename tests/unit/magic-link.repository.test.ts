@@ -1,5 +1,5 @@
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
 import { emailKey, MagicLinkRepository } from "../../apps/api/src/repositories/magic-link.repository.js";
@@ -31,10 +31,21 @@ describe("MagicLinkRepository", () => {
         expiresAt: 700,
         used: false,
       },
-      ConditionExpression: "attribute_not_exists(pk) OR #used = :true OR createdAt <= :cooldownStart",
+      ConditionExpression: "attribute_not_exists(pk) OR (#used = :true OR createdAt <= :cooldownStart)",
       ExpressionAttributeNames: { "#used": "used" },
       ExpressionAttributeValues: { ":true": true, ":cooldownStart": 40 },
     });
+  });
+
+  it("never replaces a link created after the request, when it knows when that was", async () => {
+    dynamo.on(PutCommand).resolves({});
+    await repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40, 90);
+
+    const input = dynamo.commandCalls(PutCommand)[0]!.args[0].input;
+    expect(input.ConditionExpression).toBe(
+      "attribute_not_exists(pk) OR ((#used = :true OR createdAt <= :cooldownStart) AND createdAt <= :requestedAt)",
+    );
+    expect(input.ExpressionAttributeValues).toEqual({ ":true": true, ":cooldownStart": 40, ":requestedAt": 90 });
   });
 
   it("reports a save blocked by the cooldown", async () => {
@@ -76,5 +87,25 @@ describe("MagicLinkRepository", () => {
   it("propagates unexpected errors", async () => {
     dynamo.on(UpdateCommand).rejects(new Error("boom"));
     await expect(repository.markAsUsed("luiz@example.com", "h", 100)).rejects.toThrow("boom");
+  });
+
+  it("deletes an undelivered link only if it is still that same unused link", async () => {
+    dynamo.on(DeleteCommand).resolves({});
+    await repository.deleteUndelivered("luiz@example.com", "h");
+
+    const input = dynamo.commandCalls(DeleteCommand)[0]!.args[0].input;
+    expect(input.Key).toEqual({ pk: "EMAIL#luiz@example.com" });
+    expect(input.ConditionExpression).toBe("tokenHash = :hash AND #used = :false");
+    expect(input.ExpressionAttributeValues).toEqual({ ":hash": "h", ":false": false });
+  });
+
+  it("propagates unexpected errors when deleting an undelivered link", async () => {
+    dynamo.on(DeleteCommand).rejects(new Error("boom"));
+    await expect(repository.deleteUndelivered("luiz@example.com", "h")).rejects.toThrow("boom");
+  });
+
+  it("leaves a newer link alone when deleting an undelivered one", async () => {
+    dynamo.on(DeleteCommand).rejects(new ConditionalCheckFailedException({ message: "failed", $metadata: {} }));
+    await expect(repository.deleteUndelivered("luiz@example.com", "h")).resolves.toBeUndefined();
   });
 });

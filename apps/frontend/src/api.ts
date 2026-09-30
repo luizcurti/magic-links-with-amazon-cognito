@@ -9,6 +9,7 @@ export interface AuthTokens {
 export interface Profile {
   sub: string;
   email: string;
+  emailVerified: boolean;
   authTime: string;
   expiresAt: string;
 }

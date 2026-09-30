@@ -70,30 +70,52 @@ export class MagicLinkService {
    * and in the email; the database only ever sees its hash.
    *
    * Within the cooldown window nothing is stored or sent, so a flood of
-   * requests for someone else's address produces at most one email.
+   * requests for someone else's address produces at most one email. Nor is
+   * anything sent when a link newer than `requestedAt` (epoch seconds, when
+   * the user asked) already exists: a late request must not replace it.
    */
-  async requestMagicLink(email: string): Promise<IssueResult> {
+  async requestMagicLink(email: string, requestedAt?: number): Promise<IssueResult> {
     if (!this.emailSender || !this.callbackUrl) {
       throw new Error("MagicLinkService needs an emailSender and callbackUrl to issue links");
     }
 
     const token = generateToken();
+    const tokenHash = hashToken(token);
     const createdAt = toEpochSeconds(this.now());
     const expiresAt = createdAt + this.ttlSeconds;
 
     const saved = await this.repository.save(
-      { email, tokenHash: hashToken(token), createdAt, expiresAt },
+      { email, tokenHash, createdAt, expiresAt },
       createdAt - this.cooldownSeconds,
+      requestedAt,
     );
     if (!saved) return { status: "COOLDOWN" };
 
-    await this.emailSender.sendMagicLink({
-      to: email,
-      magicLink: buildMagicLink(this.callbackUrl, email, token),
-      expiresInMinutes: Math.round(this.ttlSeconds / 60),
-    });
+    try {
+      await this.emailSender.sendMagicLink({
+        to: email,
+        magicLink: buildMagicLink(this.callbackUrl, email, token),
+        expiresInMinutes: Math.round(this.ttlSeconds / 60),
+      });
+    } catch (error) {
+      // Nobody received this link: drop it, or the cooldown would turn the
+      // retry into a silent no-op and the user would get no email at all.
+      await this.repository.deleteUndelivered(email, tokenHash);
+      throw error;
+    }
 
     return { status: "SENT", expiresAt };
+  }
+
+  /**
+   * Read-only check, without consuming the link. Lets the API turn away bad
+   * links before creating a Cognito user or spending Cognito auth quota; the
+   * atomic consume in consumeMagicLink remains the only authority.
+   */
+  async checkMagicLink(email: string, token: string): Promise<VerificationResult> {
+    if (!isValidTokenFormat(token)) return "INVALID_FORMAT";
+    const record = await this.repository.findByEmail(email);
+    return evaluateMagicLink(record, email, hashToken(token), toEpochSeconds(this.now()));
   }
 
   /**

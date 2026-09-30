@@ -1,24 +1,32 @@
 import type { APIGatewayProxyHandler } from "aws-lambda";
-import { json } from "../lib/http.js";
+import { errorResponse, header, json } from "../lib/http.js";
+import { InvalidIdTokenError, verifyIdToken } from "../lib/id-token.js";
+import { logger } from "../lib/logger.js";
 
 /**
- * GET /me — protected by an API Gateway Cognito authorizer.
+ * GET /me — protected by an API Gateway Cognito authorizer, and the ID token
+ * is verified again here (see lib/id-token.ts), so every claim returned below
+ * is proven by the pool's signature. This endpoint proves the issued JWTs work.
  *
- * By the time this runs, API Gateway has already validated the ID token's
- * signature, issuer, audience and expiry; the verified claims are forwarded
- * in the request context. This endpoint proves the issued JWTs actually work.
+ * Identify users by `sub`, which never changes. `email` is only trustworthy
+ * together with `emailVerified`.
  */
 export const handler: APIGatewayProxyHandler = async (event) => {
-  const claims = (event.requestContext.authorizer?.claims ?? {}) as Record<string, string>;
+  try {
+    const claims = await verifyIdToken(header(event, "authorization"));
 
-  if (!claims.sub) {
-    return json(401, { message: "Unauthorized" });
+    return json(200, {
+      sub: claims.sub,
+      email: claims.email,
+      emailVerified: claims.email_verified === true || claims.email_verified === "true",
+      authTime: claims.auth_time,
+      expiresAt: claims.exp,
+    });
+  } catch (error) {
+    if (error instanceof InvalidIdTokenError) {
+      logger.warn("Rejected ID token", { reason: error.reason });
+      return json(401, { message: "Unauthorized" });
+    }
+    return errorResponse(error, "ID token verification failed unexpectedly");
   }
-
-  return json(200, {
-    sub: claims.sub,
-    email: claims.email,
-    authTime: claims.auth_time,
-    expiresAt: claims.exp,
-  });
 };

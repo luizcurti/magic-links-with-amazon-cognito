@@ -10,9 +10,13 @@ step() { printf '\n\033[1;36m▶ %s\033[0m\n' "$*"; }
 step "1. POST /login  ($EMAIL)"
 curl -sf -X POST "$API_URL/login" -H 'Content-Type: application/json' -d "{\"email\":\"$EMAIL\"}" | jq .
 
-step "2. Magic link captured by LocalStack SES"
-sleep 1
-LINK="$(node scripts/emails.mjs --link --to "$EMAIL")"
+step "2. Magic link captured by LocalStack SES (sent asynchronously by the SQS worker)"
+for _ in $(seq 20); do
+  LINK="$(node scripts/emails.mjs --link --to "$EMAIL" 2>/dev/null || true)"
+  [ -n "$LINK" ] && break
+  sleep 0.5
+done
+[ -n "$LINK" ] || { echo "No magic link arrived for $EMAIL" >&2; exit 1; }
 echo "$LINK"
 TOKEN="$(echo "$LINK" | sed -E 's/.*token=([0-9a-f]+).*/\1/')"
 

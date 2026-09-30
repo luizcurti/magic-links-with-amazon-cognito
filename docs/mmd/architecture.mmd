@@ -1,7 +1,7 @@
 flowchart TB
     FE["Frontend<br/>React + Vite"]
     WAF["AWS WAF<br/>per-IP rate limits · managed rules"]
-    APIGW["API Gateway (REST)<br/>throttling · JSON access logs · X-Ray"]
+    APIGW["API Gateway (REST)<br/>per-route throttling · JSON access logs · X-Ray"]
 
     subgraph Lambdas
         LOGIN["λ login"]
@@ -17,6 +17,8 @@ flowchart TB
         CHECK["λ VerifyAuthChallengeResponse"]
     end
 
+    Q[["SQS login-requests<br/>+ dead-letter queue"]]
+    WORKER["λ send-magic-link"]
     DDB[("DynamoDB<br/>tokenHash · expiresAt · used")]
     KMS["KMS<br/>CMK"]
     SES["SES<br/>(captured locally)"]
@@ -35,11 +37,13 @@ flowchart TB
     APIGW --> REFRESH
     APIGW --> LOGOUT
 
-    LOGIN -- "AdminCreateUser" --> Cognito
-    LOGIN -- "save hash" --> DDB
-    LOGIN -- "send link" --> SES
+    LOGIN -- "enqueue {email}" --> Q
+    Q --> WORKER
+    WORKER -- "save hash<br/>(cooldown)" --> DDB
+    WORKER -- "send link" --> SES
 
-    VERIFY -- "InitiateAuth /<br/>RespondToAuthChallenge" --> Cognito
+    VERIFY -- "check link<br/>(read-only)" --> DDB
+    VERIFY -- "AdminCreateUser (first sign-in),<br/>InitiateAuth / RespondToAuthChallenge" --> Cognito
     REFRESH -- "InitiateAuth<br/>REFRESH_TOKEN_AUTH" --> Cognito
     LOGOUT -- "RevokeToken" --> Cognito
     CHECK -- "validate + consume" --> DDB

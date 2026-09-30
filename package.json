@@ -20,16 +20,19 @@
     "test": "vitest run tests/unit apps/frontend",
     "test:unit": "vitest run tests/unit apps/frontend",
     "test:integration": "vitest run tests/integration",
-    "test:api": "npx --yes newman@6.2.2 run api/magic-links.postman_collection.json --bail --delay-request 300 --env-var apiUrl=$(terraform -chdir=infrastructure/terraform output -raw api_url) --env-var clientId=$(terraform -chdir=infrastructure/terraform output -raw user_pool_client_id)",
+    "test:api": "npx --yes newman@6.2.2 run api/magic-links.postman_collection.json --bail --delay-request 300 --env-var apiUrl=$(terraform -chdir=infrastructure/terraform output -raw api_url) --env-var clientId=$(terraform -chdir=infrastructure/terraform output -raw user_pool_client_id) --env-var queueUrl=$(terraform -chdir=infrastructure/terraform output -raw login_queue_url)",
     "test:coverage": "vitest run tests/unit apps/frontend --coverage",
     "dev:frontend": "npm run dev -w apps/frontend",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:aws": "AWS_SMOKE=1 TF_WORKSPACE=aws vitest run tests/aws"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1143.0",
     "@aws-sdk/client-dynamodb": "^3.1143.0",
     "@aws-sdk/client-ses": "^3.1143.0",
+    "@aws-sdk/client-sqs": "^3.1143.0",
     "@aws-sdk/lib-dynamodb": "^3.1143.0",
+    "aws-jwt-verify": "^5.2.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {

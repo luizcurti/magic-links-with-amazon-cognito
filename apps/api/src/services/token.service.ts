@@ -33,9 +33,13 @@ export function hashesMatch(expectedHex: string, actualHex: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+/**
+ * Email and token travel in the URL fragment (`#email=…&token=…`), which the
+ * browser never sends to a server: they stay out of web server, CDN and proxy
+ * access logs, and out of anything that fetches the page.
+ */
 export function buildMagicLink(callbackUrl: string, email: string, token: string): string {
   const url = new URL(callbackUrl);
-  url.searchParams.set("email", email);
-  url.searchParams.set("token", token);
+  url.hash = new URLSearchParams({ email, token }).toString();
   return url.toString();
 }

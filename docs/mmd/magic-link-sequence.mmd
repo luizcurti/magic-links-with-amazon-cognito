@@ -3,26 +3,40 @@ sequenceDiagram
     actor U as User
     participant FE as Frontend
     participant API as API Gateway + Lambdas
+    participant Q as SQS
+    participant W as send-magic-link worker
     participant DB as DynamoDB
     participant SES as SES
     participant C as Cognito
     participant T as Auth triggers
 
     U->>FE: enters email
-    FE->>API: POST /login {email}
-    API->>C: AdminCreateUser, or AdminGetUser if it exists
-    API->>C: AdminSetUserPassword if new or still FORCE_CHANGE_PASSWORD (→ CONFIRMED)
-    API->>API: token = randomBytes(32)
-    API->>DB: conditional put {tokenHash: sha256(token), expiresAt, used: false}
-    alt previous unused link is younger than the cooldown
-        DB-->>API: ConditionalCheckFailed → nothing stored, no email
-    else
-        API->>SES: email with /auth/callback?email=…&token=…
-    end
-    API-->>FE: 202 (same response for any email, in both cases)
+    FE->>API: POST /login {email} (Content-Type: application/json, else 415)
+    API->>Q: SendMessage {email, requestedAt}
+    API-->>FE: 202 (same response and timing for any email)
 
-    U->>FE: clicks magic link
+    Q->>W: batch of requests
+    W->>W: token = randomBytes(32)
+    W->>DB: conditional put {tokenHash: sha256(token), expiresAt, used: false}
+    alt unused link younger than the cooldown, or any link newer than requestedAt
+        DB-->>W: ConditionalCheckFailed → nothing stored, no email
+    else
+        W->>SES: email with /auth/callback#35;email=…&token=… (fragment)
+        opt SES fails
+            W->>DB: delete this undelivered link
+            W-->>Q: batchItemFailures → retried, then dead-letter queue
+        end
+    end
+
+    U->>FE: opens the link, sees "Sign in as …?"
+    Note over FE: nothing happens until the click, so mail scanners cannot burn the link
+    U->>FE: clicks "Sign in"
     FE->>API: POST /auth/verify {email, token}
+    API->>DB: get → check hash, expiry, used (read-only)
+    alt bad link
+        API-->>FE: 401, no Cognito call, no user created
+    end
+    API->>C: AdminGetUser, then on first sign-in AdminCreateUser (email_verified) + AdminSetUserPassword
     API->>C: InitiateAuth(CUSTOM_AUTH)
     C->>T: DefineAuthChallenge → CUSTOM_CHALLENGE
     C->>T: CreateAuthChallenge
@@ -36,7 +50,7 @@ sequenceDiagram
     C-->>API: ID / access / refresh tokens
     API-->>FE: 200 JWTs
     FE->>API: GET /me (Authorization: ID token)
-    API-->>FE: 200 {sub, email}
+    API-->>FE: 200 {sub, email, emailVerified}
 
     Note over FE,C: ID and access tokens live 15 minutes
     FE->>API: POST /auth/refresh {refreshToken} (token expiring, or /me answered 401)

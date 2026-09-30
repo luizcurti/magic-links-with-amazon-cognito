@@ -9,7 +9,7 @@ Enter your email, click the link you receive, and you get Cognito JWTs. No passw
 ![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=node.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?logo=terraform&logoColor=white)
-![AWS](https://img.shields.io/badge/AWS-Cognito%20·%20Lambda%20·%20DynamoDB%20·%20SES%20·%20KMS%20·%20WAF-FF9900?logo=amazonaws&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-Cognito%20·%20Lambda%20·%20DynamoDB%20·%20SES%20·%20SQS%20·%20KMS%20·%20WAF-FF9900?logo=amazonaws&logoColor=white)
 ![LocalStack](https://img.shields.io/badge/LocalStack-local%20AWS-4D29B4)
 
 ---
@@ -24,12 +24,15 @@ Enter your email, click the link you receive, and you get Cognito JWTs. No passw
 - ✅ Link expiration (10 minutes, plus DynamoDB TTL cleanup)
 - ✅ Single-use tokens, enforced by an atomic conditional write
 - ✅ Token invalidation: a new link (issued once the cooldown allows it) revokes the previous one
-- ✅ Email ownership verification: the token is bound to the Cognito user's email
+- ✅ Email ownership verification: the token is bound to the Cognito user's email, which users cannot change themselves
 - ✅ Constant-time hash comparison
-- ✅ No user enumeration: `/login` gives the same response for every email
+- ✅ No user enumeration: `/login` gives the same response, in the same time, for every email, and Cognito answers unknown users with a decoy challenge
 - ✅ Encryption at rest with a customer-managed KMS key
 - ✅ Least-privilege IAM, one role per Lambda
-- ✅ Per-email cooldown (one link per minute), AWS WAF per-IP rate limits and stage throttling against email bombing
+- ✅ Per-email cooldown (one link per minute), AWS WAF per-IP rate limits and per-route throttling against email bombing
+- ✅ Scanner-safe links: parameters in the URL fragment, and nothing is verified until the user clicks "Sign in as …"
+- ✅ Cognito users are created only once someone proves they own the address
+- ✅ Asynchronous, retried email delivery (SQS + dead-letter queue): an SES outage never loses a link or locks a user out
 - ✅ Real sign-out: `POST /logout` revokes the Cognito refresh token
 - ✅ Short-lived tokens (15 minutes) renewed silently through `POST /auth/refresh`
 - ✅ AWS throttling surfaces as `429 Retry-After`, never as a generic `500`
@@ -51,9 +54,9 @@ Enter your email, click the link you receive, and you get Cognito JWTs. No passw
 
 ![AWS architecture](arch/architecture.svg)
 
-- **A. Request a link.** `POST /login` makes sure a Cognito user exists, stores `sha256(token)` in DynamoDB and emails the link with SES.
-- **B. Exchange the link.** The frontend posts `{email, token}` to `/auth/verify`. The Lambda runs Cognito `CUSTOM_AUTH`, and the `VerifyAuthChallengeResponse` trigger consumes the token atomically.
-- **C. Use the JWT.** `GET /me` is protected by the API Gateway Cognito authorizer, so the Lambda only ever sees verified claims.
+- **A. Request a link.** `POST /login` only queues the email (and when it was asked) in SQS and answers `202`. The `send-magic-link` worker applies the cooldown, stores `sha256(token)` in DynamoDB and emails the link with SES.
+- **B. Exchange the link.** The callback page asks "Sign in as …?", then posts `{email, token}` to `/auth/verify`. The Lambda checks the link in DynamoDB (read-only), creates the Cognito user on the first sign-in, and runs Cognito `CUSTOM_AUTH`; the `VerifyAuthChallengeResponse` trigger consumes the token atomically.
+- **C. Use the JWT.** `GET /me` is protected by the API Gateway Cognito authorizer, and the Lambda verifies the ID token again (signature against the pool's JWKS, issuer, audience, expiry, `token_use`) with `aws-jwt-verify`, so every claim it returns is proven.
 - **D. Session.** ID and access tokens live 15 minutes. The frontend renews them silently with `POST /auth/refresh` shortly before they expire, or once when an API call answers `401`. `POST /logout` revokes the refresh token in Cognito, so the session can't be renewed any more.
 - **AWS WAF** sits in front of the API with per-IP rate limits (stricter on `/login`) and the AWS Common and Known Bad Inputs managed rule groups.
 
@@ -75,26 +78,40 @@ sequenceDiagram
     actor U as User
     participant FE as Frontend
     participant API as API Gateway + Lambdas
+    participant Q as SQS
+    participant W as send-magic-link worker
     participant DB as DynamoDB
     participant SES as SES
     participant C as Cognito
     participant T as Auth triggers
 
     U->>FE: enters email
-    FE->>API: POST /login {email}
-    API->>C: AdminCreateUser, or AdminGetUser if it exists
-    API->>C: AdminSetUserPassword if new or still FORCE_CHANGE_PASSWORD (→ CONFIRMED)
-    API->>API: token = randomBytes(32)
-    API->>DB: conditional put {tokenHash: sha256(token), expiresAt, used: false}
-    alt previous unused link is younger than the cooldown
-        DB-->>API: ConditionalCheckFailed → nothing stored, no email
-    else
-        API->>SES: email with /auth/callback?email=…&token=…
-    end
-    API-->>FE: 202 (same response for any email, in both cases)
+    FE->>API: POST /login {email} (Content-Type: application/json, else 415)
+    API->>Q: SendMessage {email, requestedAt}
+    API-->>FE: 202 (same response and timing for any email)
 
-    U->>FE: clicks magic link
+    Q->>W: batch of requests
+    W->>W: token = randomBytes(32)
+    W->>DB: conditional put {tokenHash: sha256(token), expiresAt, used: false}
+    alt unused link younger than the cooldown, or any link newer than requestedAt
+        DB-->>W: ConditionalCheckFailed → nothing stored, no email
+    else
+        W->>SES: email with /auth/callback#35;email=…&token=… (fragment)
+        opt SES fails
+            W->>DB: delete this undelivered link
+            W-->>Q: batchItemFailures → retried, then dead-letter queue
+        end
+    end
+
+    U->>FE: opens the link, sees "Sign in as …?"
+    Note over FE: nothing happens until the click, so mail scanners cannot burn the link
+    U->>FE: clicks "Sign in"
     FE->>API: POST /auth/verify {email, token}
+    API->>DB: get → check hash, expiry, used (read-only)
+    alt bad link
+        API-->>FE: 401, no Cognito call, no user created
+    end
+    API->>C: AdminGetUser, then on first sign-in AdminCreateUser (email_verified) + AdminSetUserPassword
     API->>C: InitiateAuth(CUSTOM_AUTH)
     C->>T: DefineAuthChallenge → CUSTOM_CHALLENGE
     C->>T: CreateAuthChallenge
@@ -108,7 +125,7 @@ sequenceDiagram
     C-->>API: ID / access / refresh tokens
     API-->>FE: 200 JWTs
     FE->>API: GET /me (Authorization: ID token)
-    API-->>FE: 200 {sub, email}
+    API-->>FE: 200 {sub, email, emailVerified}
 
     Note over FE,C: ID and access tokens live 15 minutes
     FE->>API: POST /auth/refresh {refreshToken} (token expiring, or /me answered 401)
@@ -154,7 +171,7 @@ This project keeps the same Cognito trigger mechanics and changes where the stat
 | Compute | AWS Lambda (bundled with esbuild) |
 | API | Amazon API Gateway (REST) with a Cognito authorizer, behind AWS WAF |
 | Data | Amazon DynamoDB (TTL, conditional writes) |
-| Email | Amazon SES |
+| Email | Amazon SES, fed by an Amazon SQS queue (with a dead-letter queue) |
 | Encryption | AWS KMS (customer-managed key) |
 | IaC | Terraform |
 | Local cloud | LocalStack in Docker Compose |
@@ -174,14 +191,16 @@ This project keeps the same Cognito trigger mechanics and changes where the stat
 ├── apps/
 │   ├── api/src/
 │   │   ├── handlers/
-│   │   │   ├── login.ts                 # POST /login
+│   │   │   ├── login.ts                 # POST /login → queue the request
+│   │   │   ├── send-magic-link.ts       # SQS worker: cooldown, store hash, send email
 │   │   │   ├── auth-callback.ts         # POST /auth/verify → JWTs
 │   │   │   ├── me.ts                    # GET /me (Cognito authorizer)
 │   │   │   ├── refresh.ts               # POST /auth/refresh → new 15-minute tokens
 │   │   │   └── logout.ts                # POST /logout → RevokeToken
 │   │   ├── services/
 │   │   │   ├── token.service.ts         # generate / hash / compare tokens
-│   │   │   ├── magic-link.service.ts    # issue + consume links (core rules)
+│   │   │   ├── magic-link.service.ts    # issue + check + consume links (core rules)
+│   │   │   ├── login-queue.service.ts   # SQS producer for POST /login
 │   │   │   ├── email.service.ts         # SES email + templates
 │   │   │   └── cognito.service.ts       # user provisioning, CUSTOM_AUTH, refresh, revoke
 │   │   ├── repositories/
@@ -192,7 +211,7 @@ This project keeps the same Cognito trigger mechanics and changes where the stat
 │   │   ├── create-auth-challenge.ts
 │   │   └── verify-auth-challenge.ts
 │   └── frontend/                        # React + Vite (auth.ts: silent token renewal)
-├── infrastructure/terraform/            # Cognito, Lambda, API GW, WAF, DynamoDB, SES, KMS, IAM, logs
+├── infrastructure/terraform/            # Cognito, Lambda, API GW, WAF, DynamoDB, SES, SQS, KMS, IAM, logs
 ├── api/                                 # Postman collection (API contract tests)
 ├── arch/architecture.svg                # high-level AWS architecture
 ├── docs/{mmd,img}/                      # Mermaid sources and rendered diagrams
@@ -246,8 +265,8 @@ This bundles the Lambdas with esbuild, runs `terraform apply` against LocalStack
 ```
 ✓ KMS key            ✓ DynamoDB table (TTL + CMK encryption)
 ✓ SES identity       ✓ IAM roles (one per Lambda)
-✓ 8 Lambdas          ✓ Cognito user pool + client + triggers
-✓ API Gateway        ✓ Cognito authorizer + throttling
+✓ 9 Lambdas          ✓ Cognito user pool + client + triggers
+✓ SQS queue + DLQ    ✓ API Gateway + Cognito authorizer + per-route throttling
 ✓ AWS WAF (per-IP rate limits, managed rules)
 ✓ CloudWatch log groups (14-day retention) + JSON access logs
 ```
@@ -262,7 +281,7 @@ make demo EMAIL=luiz@example.com
 
 ```
 ▶ 1. POST /login  (luiz@example.com)
-▶ 2. Magic link captured by LocalStack SES
+▶ 2. Magic link captured by LocalStack SES (sent asynchronously by the SQS worker)
 ▶ 3. POST /auth/verify  (Cognito CUSTOM_AUTH)
 ▶ 4. GET /me  (JWT validated by the API Gateway Cognito authorizer)
 ▶ 5. Reusing the same link must fail
@@ -283,7 +302,7 @@ make verify EMAIL=luiz@example.com   # exchange the latest link for JWTs
 make frontend        # http://localhost:5173
 ```
 
-Enter an email, run `make link EMAIL=<that email>`, and open the printed URL.
+Enter an email, run `make link EMAIL=<that email>`, open the printed URL and click **Sign in**.
 
 ### Cleaning up
 
@@ -308,19 +327,20 @@ Run `make help` to see every target.
 
 | Variable | Used by | Description |
 |---|---|---|
-| `USER_POOL_ID`, `USER_POOL_CLIENT_ID` | login, auth-callback, refresh, logout | Cognito pool and public client |
-| `MAGIC_LINKS_TABLE` | login, verify trigger | DynamoDB table name |
-| `SES_FROM_ADDRESS` | login | Sender address |
-| `MAGIC_LINK_CALLBACK_URL` | login | Frontend route the link points to |
-| `MAGIC_LINK_TTL_SECONDS` | login | Link lifetime (default `600`) |
-| `MAGIC_LINK_COOLDOWN_SECONDS` | login | Minimum time between two links for one email (default `60`) |
+| `LOGIN_QUEUE_URL` | login | SQS queue the requests go to |
+| `USER_POOL_ID`, `USER_POOL_CLIENT_ID` | auth-callback, refresh, logout | Cognito pool and public client |
+| `MAGIC_LINKS_TABLE` | send-magic-link, auth-callback, verify trigger | DynamoDB table name |
+| `SES_FROM_ADDRESS` | send-magic-link | Sender address |
+| `MAGIC_LINK_CALLBACK_URL` | send-magic-link | Frontend route the link points to |
+| `MAGIC_LINK_TTL_SECONDS` | send-magic-link | Link lifetime (default `600`) |
+| `MAGIC_LINK_COOLDOWN_SECONDS` | send-magic-link | Minimum time between two links for one email (default `60`) |
 | `CORS_ALLOWED_ORIGIN` | API Lambdas | Allowed origin |
 
 Missing required variables fail the request with a `500` and a clear log line, instead of reaching AWS with `undefined`. There are no secrets: tokens are generated per request and only their hash is stored.
 
 **Frontend:** `make infra` writes `VITE_API_PROXY_TARGET` (the API Gateway URL) to `apps/frontend/.env.local`; the Vite dev server proxies `/api` to it.
 
-**Terraform variables** ([`variables.tf`](infrastructure/terraform/variables.tf)) cover names, URLs, the token lifetime (`token_validity_minutes`, default 15), the link TTL and cooldown (`magic_link_cooldown_seconds`, default 60), log retention (`log_retention_days`, default 14), API throttling (`api_throttle_rate_limit` / `api_throttle_burst_limit`, default 10 rps / 20 burst) and the WAF (`waf_login_rate_limit` 10 and `waf_api_rate_limit` 300 requests per IP per `waf_rate_window_seconds` 300).
+**Terraform variables** ([`variables.tf`](infrastructure/terraform/variables.tf)) cover names, URLs, the token lifetime (`token_validity_minutes`, default 15), the link TTL and cooldown (`magic_link_cooldown_seconds`, default 60), log retention (`log_retention_days`, default 14), API throttling per route (`api_throttle_rate_limit` / `api_throttle_burst_limit`, default 100 rps / 200 burst; `POST /login` has its own `login_throttle_rate_limit` / `login_throttle_burst_limit`, 20 / 40, so a flood of link requests cannot block sign-in for users who already hold a link or a session), the worker's concurrency (`send_magic_link_max_concurrency`, default 5) and the WAF (`waf_login_rate_limit` 10 and `waf_api_rate_limit` 300 requests per IP per `waf_rate_window_seconds` 300).
 
 ---
 
@@ -328,13 +348,13 @@ Missing required variables fail the request with a `500` and a clear log line, i
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/login` | none | Sends a magic link. Always returns `202`. |
+| `POST` | `/login` | none | Queues a magic link. Always returns `202` for a valid email. |
 | `POST` | `/auth/verify` | none | Exchanges `{email, token}` for Cognito JWTs. |
 | `GET` | `/me` | Cognito ID token | Returns the verified claims. |
 | `POST` | `/auth/refresh` | none (the refresh token is the proof) | Exchanges `{refreshToken}` for new ID and access tokens (`200`), or `401` once it is revoked or expired. The refresh token itself is not rotated. |
 | `POST` | `/logout` | none (the refresh token is the proof) | Revokes `{refreshToken}`. Always `204`, also for unknown or already revoked tokens. |
 
-Every route can answer `429` with `Retry-After` when WAF or an AWS dependency throttles the request, and `400` with `{message, errors[]}` for invalid input.
+Every route can answer `429` with `Retry-After` when WAF or an AWS dependency throttles the request, `400` with `{message, errors[]}` for invalid input, and `415` when the body is not sent as `Content-Type: application/json`.
 
 ```bash
 API=$(terraform -chdir=infrastructure/terraform output -raw api_url)
@@ -349,7 +369,7 @@ curl -X POST "$API/auth/verify" -H 'Content-Type: application/json' \
 # 401 {"message":"Invalid or expired magic link"}
 
 curl "$API/me" -H "Authorization: <idToken>"
-# 200 {"sub":"…","email":"luiz@example.com","authTime":"…","expiresAt":"…"}
+# 200 {"sub":"…","email":"luiz@example.com","emailVerified":true,"authTime":"…","expiresAt":"…"}
 
 curl -X POST "$API/auth/refresh" -H 'Content-Type: application/json' \
   -d '{"refreshToken":"<refreshToken>"}'
@@ -361,11 +381,11 @@ curl -X POST "$API/logout" -H 'Content-Type: application/json' \
 # 204
 ```
 
-**Postman collection.** [`api/magic-links.postman_collection.json`](api/magic-links.postman_collection.json) covers every endpoint, happy and sad paths: sign-in (it reads the magic link from LocalStack's SES mailbox), `/me`, token renewal and sign-out, plus `400` validation errors, `401` for wrong, reused, forged or revoked tokens, `403` for wrong methods and the cooldown. Import it into Postman and set `apiUrl` (`terraform output -raw api_url`) and `clientId` (`terraform output -raw user_pool_client_id`), or run it headless with `npm run test:api`.
+**Postman collection.** [`api/magic-links.postman_collection.json`](api/magic-links.postman_collection.json) covers every endpoint, happy and sad paths: sign-in (it reads the magic link from LocalStack's SES mailbox), `/me`, token renewal and sign-out, plus `400` validation errors, `415` for a body not declared as JSON, `401` for wrong, reused, forged or revoked tokens, `403` for wrong methods and the cooldown. Import it into Postman and set `apiUrl` (`terraform output -raw api_url`) and `clientId` (`terraform output -raw user_pool_client_id`), or run it headless with `npm run test:api`.
 
 ### Data model
 
-A single DynamoDB item per email. A new link replaces the old one, unless the old one is unused and younger than the cooldown (then nothing is written).
+A single DynamoDB item per email. A new link replaces the old one, unless the old one is unused and younger than the cooldown (then nothing is written). A link whose email could not be sent is deleted again, so the retry is not blocked by the cooldown. A request that reaches the worker late (retry, duplicate delivery, backed-up queue) never replaces a link created after the user asked.
 
 | Attribute | Example | Notes |
 |---|---|---|
@@ -391,6 +411,7 @@ A single DynamoDB item per email. A new link replaces the old one, unless the ol
 | `npm run test:integration` | Integration tests against the deployed stack | `make up && make infra` |
 | `npm run test:api` | Postman collection via newman | `make up && make infra` |
 | `npm run test:e2e` | Browser E2E tests with Playwright (starts Vite itself) | `make up && make infra`, `npx playwright install chromium` |
+| `make test-aws` | Smoke tests for what LocalStack does not enforce, against a real AWS deployment | `make aws-infra` (see [Deploying to real AWS](#deploying-to-real-aws)) |
 | `make demo` | Terminal smoke test of the whole flow | `make up && make infra` |
 | `make check` | lint + typecheck + unit tests + `terraform fmt -check` / `validate` | Terraform |
 | `make tf-scan` | tflint + Checkov | tflint, Checkov |
@@ -399,10 +420,12 @@ Every layer covers both the happy path and the failure cases:
 
 | Layer | Happy path | Sad path |
 |---|---|---|
-| **Unit** (Vitest, 158 tests, 100% statements/branches/functions/lines) | token primitives, link issue/consume, Cognito flow, triggers, handlers, refresh, sign-out, silent renewal (before expiry, after a 401, shared between concurrent callers), React pages, router, session | expiry boundary, reuse, races, cooldown, wrong email, malformed input, AWS throttling → 429, other AWS failures → 500 without leaking internals, stuck-user repair, incomplete Cognito responses, revoked/unknown refresh tokens, a 401 that persists after renewal, sign-out when revocation fails, late responses after unmount |
-| **Integration** (Vitest against LocalStack, 35 tests) | login → email → JWT → `/me`, 15-minute tokens, refresh → new ID token works on `/me`, user created `CONFIRMED`, stuck user repaired, only the hash stored, case-insensitive email, returning user, sign-out revokes the refresh token | reuse, 5 parallel clicks → exactly one 200, wrong token doesn't burn the real one, cross-account token, unknown email, expiry, rotation, email bombing → one email, no enumeration, 400s, `/me` without/forged/access token, no renewal after sign-out, forged refresh token, invalid sign-out/refresh bodies, 30-request burst absorbed, unknown routes |
-| **API collection** (Postman, 31 requests / 56 assertions) | 202, 200 with 15-minute JWTs, `/me` 200, `/auth/refresh` 200 and the renewed token on `/me`, `/logout` 204 and the refresh token then rejected by Cognito and by the API | 400 (invalid JSON, missing/invalid/long email, `null`, array, bad token, missing refresh token), 401 (wrong token, unknown email, reuse, no/forged/access token, forged or revoked refresh token), 403 (wrong method), cooldown, repeated sign-out |
-| **E2E** (Playwright, 9 tests) | sign in from the UI, profile, expired session renewed silently, sign out (refresh token verified revoked in Cognito), token gone from URL and history, `no-referrer` | session revoked from another device → back to login, link opened twice, tampered token, incomplete link, invalid email blocked by the browser |
+| **Unit** (Vitest, 214 tests, 100% statements/branches/functions/lines) | token primitives, link issue/check/consume, Cognito flow, triggers, handlers, SQS worker, refresh, sign-out, silent renewal (before expiry, after a 401, shared between concurrent callers), React pages, router, session | expiry boundary, reuse, races, cooldown, wrong email, malformed input, `415` for non-JSON bodies, SES failure → link dropped and message retried, malformed queue messages, unknown users get a decoy challenge, AWS throttling → 429, other AWS failures → 500 without leaking internals, stuck-user repair, incomplete Cognito responses, revoked/unknown refresh tokens, a 401 that persists after renewal, sign-out when revocation fails, late responses after unmount |
+| **Integration** (Vitest against LocalStack, 43 tests) | login → email → JWT → `/me`, 15-minute tokens, refresh → new ID token works on `/me`, link in the URL fragment, user created `CONFIRMED` only on first sign-in, `email_verified`, stuck user repaired, only the hash stored, case-insensitive email, returning user, sign-out revokes the refresh token | reuse, 5 parallel clicks → exactly one 200, wrong token doesn't burn the real one, cross-account token, unknown email, expiry, rotation, email bombing → one email, no enumeration, a bad link creates no user, 400s, `415` for `text/plain` (no email sent), app client cannot write `email`, challenge does not echo the email, `/me` without/forged/tampered/access token, no renewal after sign-out, forged refresh token, invalid sign-out/refresh bodies, 30-request burst absorbed, unknown routes |
+| **API collection** (Postman, 32 requests / 60 assertions) | 202, 200 with 15-minute JWTs, `/me` 200, `/auth/refresh` 200 and the renewed token on `/me`, `/logout` 204 and the refresh token then rejected by Cognito and by the API | 415 (`text/plain` body), 400 (invalid JSON, missing/invalid/long email, `null`, array, bad token, missing refresh token), 401 (wrong token, unknown email, reuse, no/forged/access token, forged or revoked refresh token), 403 (wrong method), cooldown, repeated sign-out |
+| **E2E** (Playwright, 11 tests) | sign in from the UI with the "Sign in as …" confirmation, profile, expired session renewed silently, sign out (refresh token verified revoked in Cognito), token gone from URL and history, `no-referrer` | session revoked from another device → back to login, a scanner opening the link does not use it, link opened twice, tampered token, incomplete link, invalid email blocked by the browser |
+
+Emails are sent asynchronously, so tests that assert "no extra email" first wait until the login queue is drained (nothing waiting or in flight): SQS deletes a message only once the worker finished it, so a slow worker makes the test wait (or fail on timeout), never pass without having checked anything.
 
 **Unit tests** need no Docker. AWS calls are mocked with `aws-sdk-client-mock`; the React components run in `happy-dom` with Testing Library.
 
@@ -431,16 +454,22 @@ The integration job needs a `LOCALSTACK_AUTH_TOKEN` repository secret. Without i
 **What is protected**
 
 - **Leaked database.** Only SHA-256 hashes are stored, and they can't be reversed into working links. The table is also encrypted with a KMS CMK.
+- **Forged tokens.** Besides the API Gateway authorizer, `/me` verifies the ID token itself (RS256 signature against the pool's JWKS, issuer, audience, expiry, `token_use = id`). A JWKS outage answers `500`, not `401`, so a valid session is never dropped. The JWKS is fetched over https; plain http is accepted only for local hosts (LocalStack).
 - **Replay.** `used` is flipped with a `ConditionExpression` that re-checks the hash, `used = false` and `expiresAt > now` in the same write. If two requests race, only one can win.
 - **Stale links.** A new link overwrites the item, so older links stop working immediately.
 - **Cross-account use.** The verify trigger reads the email from **Cognito's user attributes**, not from the client, so a token only works for the account it was issued to.
+- **Email takeover.** The app client has no write access to `email` (`write_attributes`), so a signed-in user cannot call `UpdateUserAttributes` with their access token to claim someone else's address. Emails are created `email_verified = true`, which is sound because tokens are only issued to whoever clicked a link sent to that address. Identify users by `sub`.
 - **Timing attacks.** Hashes are compared with `crypto.timingSafeEqual`.
-- **Enumeration.** `/login` answers `202` with the same body for every valid email, and the Cognito client has `prevent_user_existence_errors` enabled.
+- **Enumeration.** `/login` answers `202` with the same body for every valid email, and in the same time (it only queues the request). The client ID is public, so Cognito can be called directly: with `prevent_user_existence_errors`, Cognito runs the triggers for unknown users too, and `DefineAuthChallenge` answers them with the same decoy challenge a real user gets (they can never get tokens); `CreateAuthChallenge` publishes no parameters, so the challenge never echoes an email.
 - **Log hygiene.** Tokens and JWTs are never logged, and emails are masked (`l***@example.com`).
-- **URL leakage.** The callback page removes the token from the address bar and history before calling the API, whatever the outcome, and `<meta name="referrer" content="no-referrer">` keeps it out of `Referer` headers.
+- **URL leakage.** Email and token travel in the URL fragment (`#…`), which browsers never send to a server, so they stay out of web server, CDN and proxy logs. The callback page removes them from the address bar and history as soon as it opens, and `<meta name="referrer" content="no-referrer">` keeps them out of `Referer` headers.
+- **Link scanners and link injection.** Nothing is verified when the link is opened: the page asks "Sign in as …?" and waits for a click. Mail scanners that open (and even render) every link cannot burn it, and a link someone else sent cannot silently sign you into their account.
+- **Clickjacking.** The frontend is served with `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`, so no page can frame the "Sign in" button to trick a visitor into signing into someone else's account. The Vite server sends them locally; whatever hosts the production build must send them too.
+- **Cross-site requests.** Bodies must be sent as `Content-Type: application/json` (`415` otherwise). A foreign page can only send that after a CORS preflight, which it fails, so it cannot make its visitors' browsers request links on its behalf.
 - **Email bombing.** A second link for the same email within 60 seconds is neither stored nor sent (atomic conditional write, so parallel requests can't bypass it). The response is the same `202`, so the cooldown reveals nothing.
-- **Mass mailing from one client.** AWS WAF allows 10 `POST /login` per IP per 5 minutes (300 requests overall) and answers `429 Retry-After` beyond that.
-- **First sign-in on real Cognito.** `AdminCreateUser` leaves users in `FORCE_CHANGE_PASSWORD`, and Cognito refuses to sign them in. `/login` sets a random permanent password nobody knows (the client only allows `CUSTOM_AUTH`), so new users are `CONFIRMED`. If that step ever fails, the next `/login` finds the user still in `FORCE_CHANGE_PASSWORD` and repairs it. LocalStack does not enforce this rule, so integration tests check the status directly.
+- **Mass mailing from one client.** AWS WAF allows 10 `POST /login` per IP per 5 minutes (300 requests overall) and answers `429 Retry-After` beyond that. The rule decodes and normalises the path first, so `/login/`, `//login` or percent-encoded spellings (which API Gateway routes to the same Lambda) are counted too. `POST /login` also has its own throttling budget, so flooding it cannot starve the other routes.
+- **Email delivery failures.** If SES fails, the undelivered link is deleted and SQS retries the message (then parks it in a dead-letter queue), so an outage never leaves a user stuck behind the cooldown with no email.
+- **First sign-in on real Cognito.** The Cognito user is created by `/auth/verify`, only after the link was checked, so addresses nobody verifies never become users. `AdminCreateUser` leaves users in `FORCE_CHANGE_PASSWORD`, and Cognito refuses to sign them in, so a random permanent password nobody knows is set (the client only allows `CUSTOM_AUTH`), and new users are `CONFIRMED`. If that step ever fails, the next sign-in finds the user still in `FORCE_CHANGE_PASSWORD` and repairs it. LocalStack does not enforce this rule, so integration tests check the status directly.
 - **Sign-out.** `POST /logout` revokes the refresh token, and with it the access tokens minted from it, so a stolen session can't be extended.
 - **Throttling.** When an AWS dependency is still throttling after the SDK's retries, clients get `429 Retry-After: 5`, not a `500`.
 
@@ -448,11 +477,12 @@ The integration job needs a `LOCALSTACK_AUTH_TOKEN` repository secret. Without i
 
 - **The ID token outlives sign-out by at most 15 minutes.** API Gateway validates the JWT signature and expiry without asking Cognito about revocation, so an ID token keeps working on `/me` until it expires. Tokens are short-lived for exactly this reason, and an integration test documents the behaviour. Closing the window completely would need a Cognito call on every request (`GetUser` with the access token), which adds latency and uses Cognito quota on every call.
 - **No refresh-token rotation.** The same refresh token (30 days) is reused for every renewal. Cognito can rotate it on each use, which limits the damage of a leaked refresh token; it is not enabled here.
-- **Rate limits are only enforced on AWS.** LocalStack provisions the WAF and the stage throttling but doesn't enforce them, so their `429`s are covered by Terraform validation and unit tests, not by an end-to-end test. What LocalStack does enforce is the Lambda concurrency cap from `docker-compose.yml`, and a 30-request burst test keeps it honest.
+- **Some protections are only enforced on AWS.** LocalStack does not enforce the app client's `write_attributes`, the WAF or the API throttling, does not run the auth triggers for unknown users, and does not check JWT signatures in the Cognito authorizer (the `/me` Lambda does, so that one is tested locally too). Integration tests check the configuration, unit tests the trigger logic, and `make test-aws` checks the real behaviour on an AWS deployment: email change refused, decoy challenge for unknown users, forged tokens refused by the authorizer, and the `/login` WAF limit, including `/login/` and `//login`. API throttling is not load-tested.
+- **The app client is public.** Anyone can call `InitiateAuth` / `RespondToAuthChallenge` directly, outside the API WAF (they still need a valid link to get tokens). A confidential client (a secret, `SECRET_HASH` computed by the Lambdas) would close that path; a per-IP WAF on the user pool would not, since the Lambdas call Cognito from a few shared AWS addresses.
+- **Rate limits are only enforced on AWS.** LocalStack provisions the WAF and the API throttling but doesn't enforce them, so their `429`s are covered by Terraform validation and unit tests, not by an end-to-end test. What LocalStack does enforce is the Lambda concurrency cap from `docker-compose.yml`, and a 30-request burst test keeps it honest.
 - **Anonymous IPs are allowed.** The `AWSManagedRulesAnonymousIpList` group is off on purpose: it would block legitimate users on VPNs.
-- **Implicit sign-up.** Any email that requests a link gets a Cognito user. Put a separate sign-up flow or an allow-list in front of this if that's not acceptable.
+- **Implicit sign-up.** Anyone who clicks a link sent to their address gets a Cognito user. Put a separate sign-up flow or an allow-list in front of this if that's not acceptable.
 - **Token storage in the browser.** The demo keeps JWTs in `sessionStorage`. A production app should hold them in memory or in `httpOnly` cookies set by a backend-for-frontend.
-- **Link scanners.** Some corporate email scanners prefetch links. The callback page exchanges the token with a `POST` from JavaScript, so scanners that only issue a `GET` don't consume the link. Scanners that run JavaScript still could; an explicit "Sign in" button on the callback page would close that gap.
 - **Same-device only.** A link can't be opened on one device to sign in on another. Cross-device sign-in would need a polling or WebSocket handshake.
 
 ---
@@ -472,14 +502,22 @@ make outputs                                          # api_url, user_pool_id, �
 
 ## Deploying to real AWS
 
-The code has no LocalStack-specific logic. Inside LocalStack, the AWS SDK picks up `AWS_ENDPOINT_URL` automatically. To target a real account:
+The code has no LocalStack-specific logic (the SDK picks up `AWS_ENDPOINT_URL` inside LocalStack). Terraform takes `target = "localstack"` (default) or `target = "aws"`; with `aws` it uses your default credential chain and real endpoints, and derives the Cognito issuer for the `/me` token check. The real deployment lives in its own Terraform workspace (`aws`), so it never mixes with the disposable LocalStack state.
 
-1. In [`main.tf`](infrastructure/terraform/main.tf), remove the static credentials, the `skip_*` flags and the `endpoints` block.
-2. Bootstrap remote state once: an S3 bucket with versioning and encryption, then add a `backend "s3"` block with `use_lockfile = true` (Terraform ≥ 1.10), or a DynamoDB lock table for older versions.
-3. Verify a real SES identity, and move SES out of the sandbox.
-4. Point `magic_link_callback_url` / `frontend_origin` at your deployed frontend.
-5. Revisit the production items skipped in [`.checkov.yaml`](infrastructure/terraform/.checkov.yaml) and the ones this local project leaves out: CloudWatch alarms with a notification target, longer log retention, Lambda aliases for gradual rollout, refresh-token rotation.
-6. Run a rate-limit smoke test: LocalStack does not enforce the WAF or stage throttling, so their `429`s are first observable on AWS.
+```bash
+make aws-infra        # terraform apply -var target=aws in workspace "aws" (AWS_TF_VARS="-var ..." to pass more)
+make test-aws         # smoke tests for what LocalStack does not enforce
+make aws-destroy      # tear it down
+```
+
+**It costs money and changes the account**: WAF web ACL and rules, a KMS key, API Gateway, Lambda, SQS, DynamoDB and Cognito are billed (small amounts for a short test, but WAF and KMS bill monthly until destroyed), and `aws_api_gateway_account` sets the account-wide CloudWatch role for API Gateway. `make test-aws` blocks `POST /login` from your IP for the WAF window (5 minutes), creates Cognito users named `smoke-…@example.com` and deletes them afterwards, and sends WAF-test emails only to the SES mailbox simulator.
+
+For production, on top of that:
+
+1. Bootstrap remote state once: an S3 bucket with versioning and encryption, then add a `backend "s3"` block with `use_lockfile = true` (Terraform ≥ 1.10), or a DynamoDB lock table for older versions.
+2. Set `ses_from_address` to an address or domain you own, verify it (DKIM/SPF/DMARC), and move SES out of the sandbox.
+3. Point `magic_link_callback_url` / `frontend_origin` at your deployed frontend, and serve it with the same security headers as the Vite server (`frame-ancestors 'none'`, `X-Frame-Options: DENY`).
+4. Revisit the production items skipped in [`.checkov.yaml`](infrastructure/terraform/.checkov.yaml) and the ones this local project leaves out: CloudWatch alarms with a notification target (5xx, WAF blocks, dead-letter queue depth, SES bounces), longer log retention, Lambda aliases for gradual rollout, refresh-token rotation.
 
 ---
 
@@ -488,7 +526,7 @@ The code has no LocalStack-specific logic. Inside LocalStack, the AWS SDK picks 
 - **DynamoDB instead of a Cognito custom attribute** for token state. See [How this differs from the article](#how-this-differs-from-the-article).
 - **One Lambda per route and per trigger.** Each has its own IAM role with only the permissions it needs; bundles are tiny because esbuild tree-shakes per entry point.
 - **`/auth/refresh` and `/logout` have no authorizer.** Holding the refresh token is the proof of ownership, and an expired ID token must never prevent someone from renewing the session or signing out.
-- **No Step Functions, queues or DLQs.** Every invocation is synchronous (API Gateway or Cognito), so there is no async work to orchestrate or retry.
+- **A queue between `/login` and the email.** `POST /login` does no per-email work, so its response time reveals nothing, and SES failures are retried by SQS with a dead-letter queue instead of failing the request. Everything else stays synchronous (API Gateway or Cognito), with no Step Functions.
 - **Plain classes, no DI framework.** Handlers wire their dependencies directly. `MagicLinkService` holds the rules and `evaluateMagicLink` is a pure function, so the core logic is tested without AWS mocks.
 - **Small in-house JSON logger** instead of Powertools: three functions with masked emails are all the logging these Lambdas need.
 - **Biome** for lint and format. The project uses TypeScript 7 (native compiler), which `typescript-eslint` does not support yet.

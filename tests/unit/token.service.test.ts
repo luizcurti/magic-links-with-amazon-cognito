@@ -53,11 +53,13 @@ describe("token format", () => {
 });
 
 describe("magic link", () => {
-  it("url-encodes email and token as query parameters", () => {
+  it("url-encodes email and token in the fragment, which browsers never send to a server", () => {
     const link = buildMagicLink("http://localhost:5173/auth/callback", "luiz+test@example.com", "abc");
     const url = new URL(link);
+    const params = new URLSearchParams(url.hash.slice(1));
     expect(url.pathname).toBe("/auth/callback");
-    expect(url.searchParams.get("email")).toBe("luiz+test@example.com");
-    expect(url.searchParams.get("token")).toBe("abc");
+    expect(url.search).toBe("");
+    expect(params.get("email")).toBe("luiz+test@example.com");
+    expect(params.get("token")).toBe("abc");
   });
 });

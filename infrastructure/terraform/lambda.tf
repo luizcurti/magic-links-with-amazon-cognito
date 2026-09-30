@@ -116,8 +116,29 @@ resource "aws_lambda_function" "login" {
 
   environment {
     variables = merge(local.api_env, {
-      USER_POOL_ID                = aws_cognito_user_pool.main.id
-      USER_POOL_CLIENT_ID         = aws_cognito_user_pool_client.web.id
+      LOGIN_QUEUE_URL = aws_sqs_queue.login_requests.url
+    })
+  }
+}
+
+resource "aws_lambda_function" "send_magic_link" {
+  function_name    = "${local.name}-send-magic-link"
+  role             = aws_iam_role.lambda["send-magic-link"].arn
+  runtime          = var.lambda_runtime
+  handler          = "index.handler"
+  filename         = data.archive_file.lambda["send-magic-link"].output_path
+  source_code_hash = data.archive_file.lambda["send-magic-link"].output_base64sha256
+  timeout          = 10
+  memory_size      = 256
+
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+
+  environment {
+    variables = merge(local.common_env, {
       MAGIC_LINKS_TABLE           = aws_dynamodb_table.magic_links.name
       SES_FROM_ADDRESS            = aws_ses_email_identity.sender.email
       MAGIC_LINK_CALLBACK_URL     = var.magic_link_callback_url
@@ -147,6 +168,7 @@ resource "aws_lambda_function" "auth_callback" {
     variables = merge(local.api_env, {
       USER_POOL_ID        = aws_cognito_user_pool.main.id
       USER_POOL_CLIENT_ID = aws_cognito_user_pool_client.web.id
+      MAGIC_LINKS_TABLE   = aws_dynamodb_table.magic_links.name
     })
   }
 }
@@ -168,7 +190,10 @@ resource "aws_lambda_function" "me" {
   depends_on = [aws_cloudwatch_log_group.lambda]
 
   environment {
-    variables = local.api_env
+    variables = merge(local.api_env, {
+      ID_TOKEN_ISSUER     = local.cognito_issuer
+      USER_POOL_CLIENT_ID = aws_cognito_user_pool_client.web.id
+    })
   }
 }
 

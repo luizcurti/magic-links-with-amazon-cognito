@@ -44,6 +44,15 @@
     {
       "key": "renewedIdToken",
       "value": ""
+    },
+    {
+      "key": "queueUrl",
+      "value": "",
+      "description": "terraform output -raw login_queue_url (set by npm run test:api)"
+    },
+    {
+      "key": "queueDrained",
+      "value": ""
     }
   ],
   "item": [
@@ -233,6 +242,35 @@
           ]
         },
         {
+          "name": "415 - body not declared as JSON (a web page could post it cross-site without CORS)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "url": "{{apiUrl}}/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"text-plain@example.com\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 415\", () => pm.response.to.have.status(415));",
+                  "pm.test(\"says why\", () => pm.expect(pm.response.json().message).to.eql(\"Content-Type must be application/json\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "202 - sends a magic link",
           "request": {
             "method": "POST",
@@ -337,10 +375,47 @@
           },
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Emails are sent asynchronously by the SQS worker, which may be cold-starting. Wait until the",
+                  "// email arrived AND the login queue is drained (nothing waiting or in flight, three reads in a",
+                  "// row): SQS deletes a message only once the worker finished it, so the single-email (cooldown)",
+                  "// check below then really covers both requests instead of passing after an arbitrary sleep.",
+                  "const email = pm.collectionVariables.get(\"email\");",
+                  "const localstack = pm.variables.replaceIn(\"{{localstackUrl}}\");",
+                  "const queueUrl = pm.variables.replaceIn(\"{{queueUrl}}\");",
+                  "const deadline = Date.now() + 30000;",
+                  "let emptyReads = 0;",
+                  "pm.collectionVariables.set(\"queueDrained\", \"false\");",
+                  "const retry = () => (Date.now() < deadline ? setTimeout(poll, 250) : undefined);",
+                  "const poll = () => pm.sendRequest(`${localstack}/_aws/ses`, (err, res) => {",
+                  "  const arrived = !err && (res.json().messages || []).some((m) => m.Destination.ToAddresses.includes(email));",
+                  "  if (!arrived) return retry();",
+                  "  pm.sendRequest({",
+                  "    url: `${localstack}/`,",
+                  "    method: \"POST\",",
+                  "    header: { \"Content-Type\": \"application/x-amz-json-1.0\", \"X-Amz-Target\": \"AmazonSQS.GetQueueAttributes\" },",
+                  "    body: { mode: \"raw\", raw: JSON.stringify({ QueueUrl: queueUrl, AttributeNames: [\"ApproximateNumberOfMessages\", \"ApproximateNumberOfMessagesNotVisible\"] }) },",
+                  "  }, (qErr, qRes) => {",
+                  "    const a = qErr ? {} : qRes.json().Attributes || {};",
+                  "    const pending = Number(a.ApproximateNumberOfMessages ?? 1) + Number(a.ApproximateNumberOfMessagesNotVisible ?? 1);",
+                  "    emptyReads = pending === 0 ? emptyReads + 1 : 0;",
+                  "    if (emptyReads >= 3) pm.collectionVariables.set(\"queueDrained\", \"true\");",
+                  "    else retry();",
+                  "  });",
+                  "});",
+                  "poll();"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
+                  "pm.test(\"the worker finished every queued request\", () => pm.expect(pm.collectionVariables.get(\"queueDrained\")).to.eql(\"true\"));",
                   "const email = pm.collectionVariables.get(\"email\");",
                   "const latest = pm.response.json().messages",
                   "  .filter((m) => m.Destination.ToAddresses.includes(email))",
@@ -349,7 +424,8 @@
                   "const link = latest && latest.Body.text_part.match(/https?:\\/\\/\\S+token=[0-9a-f]{64}/);",
                   "pm.test(\"an email with a magic link was captured\", () => pm.expect(link).to.be.an(\"array\"));",
                   "pm.test(\"the cooldown sent a single email for two requests\", () => pm.expect(pm.response.json().messages.filter((m) => m.Destination.ToAddresses.includes(email))).to.have.lengthOf(1));",
-                  "const [, path, token] = link[0].match(/^https?:\\/\\/[^/]+(\\/[^?]*)\\?.*token=([0-9a-f]{64})/);",
+                  "const [, path, token] = link[0].match(/^https?:\\/\\/[^/]+(\\/[^?#]*)#.*token=([0-9a-f]{64})/);",
+                  "pm.test(\"email and token travel in the fragment, never sent to a server\", () => pm.expect(link[0]).to.match(/\\/auth\\/callback#email=/));",
                   "pm.test(\"the link points to the frontend callback\", () => pm.expect(path).to.eql(\"/auth/callback\"));",
                   "pm.collectionVariables.set(\"token\", token);"
                 ]

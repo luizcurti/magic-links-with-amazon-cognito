@@ -4,10 +4,10 @@ stateDiagram-v2
 
     state "DefineAuthChallenge" as Evaluate
     state "VerifyAuthChallengeResponse" as Verify
-    Evaluate --> Fail: user not found<br/>or a non-custom challenge in the session
-    Evaluate --> IssueTokens: last answer correct
+    Evaluate --> Fail: a non-custom challenge in the session
+    Evaluate --> IssueTokens: last answer correct<br/>(never for an unknown user)
     Evaluate --> Fail: 3 wrong answers
-    Evaluate --> CustomChallenge: otherwise
+    Evaluate --> CustomChallenge: otherwise, unknown users included<br/>(decoy: no account enumeration)
 
     CustomChallenge --> Verify: client answers with the token
     Verify --> Evaluate: answerCorrect = true / false

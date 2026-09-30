@@ -59,9 +59,28 @@ describe("DefineAuthChallenge", () => {
     expect(result.response).toMatchObject({ issueTokens: false, failAuthentication: true });
   });
 
-  it("fails when the user does not exist", async () => {
-    const result = (await defineAuthChallenge(defineEvent([], true), context, callback))!;
-    expect(result.response.failAuthentication).toBe(true);
+  describe("unknown users (no account enumeration)", () => {
+    it("get the same first challenge as a real user", async () => {
+      const unknown = (await defineAuthChallenge(defineEvent([], true), context, callback))!;
+      const known = (await defineAuthChallenge(defineEvent([]), context, callback))!;
+      expect(unknown.response).toEqual(known.response);
+    });
+
+    it("get the same retries as a real user", async () => {
+      const result = (await defineAuthChallenge(defineEvent([attempt(false)], true), context, callback))!;
+      expect(result.response.challengeName).toBe("CUSTOM_CHALLENGE");
+    });
+
+    it(`fail after ${MAX_ATTEMPTS} attempts, like a real user`, async () => {
+      const session = Array.from({ length: MAX_ATTEMPTS }, () => attempt(false));
+      const result = (await defineAuthChallenge(defineEvent(session, true), context, callback))!;
+      expect(result.response).toMatchObject({ issueTokens: false, failAuthentication: true });
+    });
+
+    it("never get tokens, even if an answer were marked correct", async () => {
+      const result = (await defineAuthChallenge(defineEvent([attempt(true)], true), context, callback))!;
+      expect(result.response.issueTokens).toBe(false);
+    });
   });
 
   it("refuses sessions that mix in other challenge types", async () => {
@@ -72,7 +91,7 @@ describe("DefineAuthChallenge", () => {
 });
 
 describe("CreateAuthChallenge", () => {
-  it("exposes only the email publicly and keeps no secret in the challenge", async () => {
+  it("publishes nothing and keeps no secret in the challenge", async () => {
     const event = {
       request: { userAttributes: { email: EMAIL }, challengeName: "CUSTOM_CHALLENGE", session: [] },
       response: {},
@@ -80,20 +99,22 @@ describe("CreateAuthChallenge", () => {
 
     const result = (await createAuthChallenge(event, context, callback))!;
     expect(result.response).toEqual({
-      publicChallengeParameters: { email: EMAIL },
+      publicChallengeParameters: {},
       privateChallengeParameters: {},
       challengeMetadata: "MAGIC_LINK",
     });
   });
 
-  it("falls back to an empty email when the user has none", async () => {
-    const event = {
-      request: { userAttributes: {}, challengeName: "CUSTOM_CHALLENGE", session: [] },
-      response: {},
-    } as unknown as CreateAuthChallengeTriggerEvent;
+  it("answers an unknown user exactly like a real one", async () => {
+    const challenge = (userAttributes: Record<string, string>, userNotFound: boolean) =>
+      ({
+        request: { userAttributes, challengeName: "CUSTOM_CHALLENGE", session: [], userNotFound },
+        response: {},
+      }) as unknown as CreateAuthChallengeTriggerEvent;
 
-    const result = (await createAuthChallenge(event, context, callback))!;
-    expect(result.response.publicChallengeParameters).toEqual({ email: "" });
+    const known = (await createAuthChallenge(challenge({ email: EMAIL }, false), context, callback))!;
+    const unknown = (await createAuthChallenge(challenge({}, true), context, callback))!;
+    expect(unknown.response).toEqual(known.response);
   });
 });
 
@@ -161,6 +182,14 @@ describe("VerifyAuthChallengeResponse", () => {
     dynamo.on(GetCommand).resolves({});
     await verifyAuthChallenge(verifyEvent(TOKEN, "Luiz@Example.com"), context, callback);
     expect(dynamo.commandCalls(GetCommand)[0]!.args[0].input.Key).toEqual({ pk: `EMAIL#${EMAIL}` });
+  });
+
+  it("rejects every answer for an unknown user without touching the table", async () => {
+    const event = verifyEvent(TOKEN);
+    (event.request as { userNotFound?: boolean }).userNotFound = true;
+    const result = (await verifyAuthChallenge(event, context, callback))!;
+    expect(result.response.answerCorrect).toBe(false);
+    expect(dynamo.commandCalls(GetCommand)).toHaveLength(0);
   });
 
   it("rejects when the Cognito user has no email", async () => {

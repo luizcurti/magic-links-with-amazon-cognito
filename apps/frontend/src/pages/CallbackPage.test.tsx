@@ -5,13 +5,11 @@ import { session } from "../session";
 import { CallbackPage } from "./CallbackPage";
 
 const TOKENS = { idToken: "a.b.c", accessToken: "access", expiresIn: 3600, tokenType: "Bearer" };
+const TOKEN = "ab".repeat(32);
 
-let counter = 0;
-/** Each test uses its own token: verification promises are cached per token at module level. */
-function openLink(query?: string) {
-  const token = (counter++).toString(16).padStart(64, "0");
-  window.history.replaceState({}, "", `/auth/callback${query ?? `?email=luiz%40example.com&token=${token}`}`);
-  return token;
+/** Opens the callback page the way the email link does: parameters in the fragment. */
+function openLink(fragment = `#email=luiz%40example.com&token=${TOKEN}`) {
+  window.history.replaceState({}, "", `/auth/callback${fragment}`);
 }
 
 function mockVerify(response: Response) {
@@ -20,11 +18,13 @@ function mockVerify(response: Response) {
   return fetchMock;
 }
 
+const clickSignIn = async () => (await screen.findByRole("button", { name: "Sign in" })).click();
+
 describe("CallbackPage", () => {
   beforeEach(() => sessionStorage.clear());
 
-  it("exchanges the link once, even under StrictMode, and opens the profile", async () => {
-    const token = openLink();
+  it("verifies nothing until the user confirms who they are signing in as", async () => {
+    openLink();
     const fetchMock = mockVerify(Response.json(TOKENS));
 
     render(
@@ -33,21 +33,46 @@ describe("CallbackPage", () => {
       </StrictMode>,
     );
 
+    expect(await screen.findByText("luiz@example.com")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("exchanges the link once on click and opens the profile", async () => {
+    openLink();
+    const fetchMock = mockVerify(Response.json(TOKENS));
+
+    render(
+      <StrictMode>
+        <CallbackPage />
+      </StrictMode>,
+    );
+    await clickSignIn();
+
     await waitFor(() => expect(window.location.pathname).toBe("/profile"));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/auth/verify",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ email: "luiz@example.com", token }) }),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ email: "luiz@example.com", token: TOKEN }) }),
     );
     expect(session.load()).toMatchObject(TOKENS);
   });
 
-  it("removes the token from the address bar before calling the API", () => {
+  it("removes the token from the address bar as soon as the page opens", () => {
     openLink();
-    mockVerify(new Response(null, { status: 401 }));
-
     render(<CallbackPage />);
 
+    expect(window.location.hash).toBe("");
+    expect(window.location.search).toBe("");
+  });
+
+  it("still accepts a link that carries its parameters in the query string", async () => {
+    openLink(`?email=luiz%40example.com&token=${TOKEN}`);
+    const fetchMock = mockVerify(Response.json(TOKENS));
+
+    render(<CallbackPage />);
+    await clickSignIn();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(window.location.search).toBe("");
   });
 
@@ -56,23 +81,24 @@ describe("CallbackPage", () => {
     mockVerify(Response.json({ message: "Invalid or expired magic link" }, { status: 401 }));
 
     render(<CallbackPage />);
+    await clickSignIn();
 
     expect(await screen.findByText("This link is invalid, expired or has already been used.")).toBeTruthy();
     expect(session.load()).toBeUndefined();
-    expect(window.location.search).toBe("");
   });
 
   it.each([
-    ["no token", "?email=luiz%40example.com"],
-    ["no email", `?token=${"a".repeat(64)}`],
+    ["no token", "#email=luiz%40example.com"],
+    ["no email", `#token=${TOKEN}`],
     ["no parameters", ""],
-  ])("rejects an incomplete link (%s) without calling the API", async (_label, query) => {
-    openLink(query);
+  ])("rejects an incomplete link (%s) without calling the API", async (_label, fragment) => {
+    openLink(fragment);
     const fetchMock = mockVerify(Response.json(TOKENS));
 
     render(<CallbackPage />);
 
     expect(await screen.findByText("This link is incomplete. Please request a new one.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -94,6 +120,7 @@ describe("CallbackPage", () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise<Response>((r) => (resolve = r))));
 
     const { unmount } = render(<CallbackPage />);
+    await clickSignIn();
     unmount();
     resolve(response());
     await new Promise((r) => setTimeout(r, 0));

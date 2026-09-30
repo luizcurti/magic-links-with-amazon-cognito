@@ -4,6 +4,23 @@ variable "project_name" {
   default     = "magic-links"
 }
 
+variable "target" {
+  description = "Where to deploy: \"localstack\" (default) or \"aws\" (a real account, default credential chain)."
+  type        = string
+  default     = "localstack"
+
+  validation {
+    condition     = contains(["localstack", "aws"], var.target)
+    error_message = "target must be \"localstack\" or \"aws\"."
+  }
+}
+
+variable "localstack_cognito_issuer_base" {
+  description = "Prefix of the `iss` claim in tokens issued by LocalStack Cognito (followed by /<pool id>)."
+  type        = string
+  default     = "http://localhost.localstack.cloud:4566"
+}
+
 variable "region" {
   description = "AWS region emulated by LocalStack."
   type        = string
@@ -70,15 +87,33 @@ variable "log_retention_days" {
 }
 
 variable "api_throttle_rate_limit" {
-  description = "Steady-state requests per second allowed across the API stage."
+  description = "Steady-state requests per second allowed on each API method (except POST /login)."
   type        = number
-  default     = 10
+  default     = 100
 }
 
 variable "api_throttle_burst_limit" {
-  description = "Maximum concurrent request burst allowed across the API stage."
+  description = "Maximum concurrent request burst allowed on each API method (except POST /login)."
+  type        = number
+  default     = 200
+}
+
+variable "login_throttle_rate_limit" {
+  description = "Steady-state requests per second allowed on POST /login."
   type        = number
   default     = 20
+}
+
+variable "login_throttle_burst_limit" {
+  description = "Maximum concurrent request burst allowed on POST /login."
+  type        = number
+  default     = 40
+}
+
+variable "send_magic_link_max_concurrency" {
+  description = "Maximum concurrent send-magic-link workers (keeps SES under its sending rate). Minimum 2."
+  type        = number
+  default     = 5
 }
 
 variable "magic_link_cooldown_seconds" {

@@ -1,18 +1,15 @@
 import type { APIGatewayProxyHandler } from "aws-lambda";
-import { getCognitoClient, getDynamoClient, getSesClient } from "../lib/aws-clients.js";
-import { numberEnv, requireEnv } from "../lib/env.js";
+import { getSqsClient } from "../lib/aws-clients.js";
+import { requireEnv } from "../lib/env.js";
 import { errorResponse, json, parseJsonBody } from "../lib/http.js";
 import { logger, maskEmail } from "../lib/logger.js";
 import { loginRequestSchema, validate } from "../lib/validation.js";
-import { MagicLinkRepository } from "../repositories/magic-link.repository.js";
-import { CognitoService } from "../services/cognito.service.js";
-import { SesEmailService } from "../services/email.service.js";
-import { DEFAULT_COOLDOWN_SECONDS, DEFAULT_TTL_SECONDS, MagicLinkService } from "../services/magic-link.service.js";
+import { LoginQueue } from "../services/login-queue.service.js";
 
 /**
- * The same response is returned whether or not the email already had an
- * account, and whether or not the cooldown suppressed the email, so this
- * endpoint cannot be used to enumerate users or probe their activity.
+ * The same response is returned for every valid email, whether or not it has
+ * an account or is inside its cooldown, so this endpoint cannot be used to
+ * enumerate users or probe their activity.
  */
 export const GENERIC_RESPONSE = {
   message: "If the email address is valid, a magic link is on its way.",
@@ -20,34 +17,22 @@ export const GENERIC_RESPONSE = {
 
 /**
  * POST /login  { "email": "user@example.com" }
+ *
+ * Only validates and queues the request: the send-magic-link worker applies
+ * the cooldown, stores the link and sends the email. Doing no per-email work
+ * here keeps the response time identical in every case (no timing side
+ * channel), and creates no Cognito user for addresses nobody verifies.
  */
 export const handler: APIGatewayProxyHandler = async (event) => {
   try {
     const { email } = validate(loginRequestSchema, parseJsonBody(event));
 
-    const cognito = new CognitoService(
-      getCognitoClient(),
-      requireEnv("USER_POOL_ID"),
-      requireEnv("USER_POOL_CLIENT_ID"),
-    );
-    const magicLinks = new MagicLinkService({
-      repository: new MagicLinkRepository(getDynamoClient(), requireEnv("MAGIC_LINKS_TABLE")),
-      emailSender: new SesEmailService(getSesClient(), requireEnv("SES_FROM_ADDRESS")),
-      callbackUrl: requireEnv("MAGIC_LINK_CALLBACK_URL"),
-      ttlSeconds: numberEnv("MAGIC_LINK_TTL_SECONDS", DEFAULT_TTL_SECONDS),
-      cooldownSeconds: numberEnv("MAGIC_LINK_COOLDOWN_SECONDS", DEFAULT_COOLDOWN_SECONDS),
-    });
+    const requestedAt = Math.floor(Date.now() / 1000);
+    await new LoginQueue(getSqsClient(), requireEnv("LOGIN_QUEUE_URL")).enqueue({ email, requestedAt });
 
-    await cognito.ensureUser(email);
-    const result = await magicLinks.requestMagicLink(email);
-
-    if (result.status === "SENT") {
-      logger.info("Magic link issued", { email: maskEmail(email), expiresAt: result.expiresAt });
-    } else {
-      logger.info("Magic link not sent: cooldown active", { email: maskEmail(email) });
-    }
+    logger.info("Magic link requested", { email: maskEmail(email) });
     return json(202, GENERIC_RESPONSE);
   } catch (error) {
-    return errorResponse(error, "Failed to issue magic link");
+    return errorResponse(error, "Failed to request magic link");
   }
 };

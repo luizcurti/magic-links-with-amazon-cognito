@@ -6,6 +6,7 @@ import { build } from "esbuild";
 
 const functions = {
   login: "apps/api/src/handlers/login.ts",
+  "send-magic-link": "apps/api/src/handlers/send-magic-link.ts",
   "auth-callback": "apps/api/src/handlers/auth-callback.ts",
   me: "apps/api/src/handlers/me.ts",
   logout: "apps/api/src/handlers/logout.ts",

@@ -42,6 +42,12 @@ resource "aws_cognito_user_pool_client" "web" {
     "ALLOW_REFRESH_TOKEN_AUTH",
   ]
 
+  # The email is the user's identity, and only a magic link proves they own it:
+  # users must never change it themselves (UpdateUserAttributes with their
+  # access token). An empty list would mean "every attribute" to Cognito, so
+  # one harmless attribute is named instead.
+  write_attributes = ["locale"]
+
   # Do not reveal whether an account exists.
   prevent_user_existence_errors = "ENABLED"
   enable_token_revocation       = true

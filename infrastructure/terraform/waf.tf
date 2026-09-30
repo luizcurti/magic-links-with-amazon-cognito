@@ -39,10 +39,12 @@ resource "aws_wafv2_web_acl" "api" {
         evaluation_window_sec = var.waf_rate_window_seconds
         aggregate_key_type    = "IP"
 
+        # API Gateway routes /login/, //login and percent-encoded spellings to the
+        # same Lambda, so the path is decoded and normalised before matching, and
+        # a trailing slash is allowed. A plain ENDS_WITH "/login" missed them.
         scope_down_statement {
-          byte_match_statement {
-            search_string         = "/login"
-            positional_constraint = "ENDS_WITH"
+          regex_match_statement {
+            regex_string = "/login/*$"
 
             field_to_match {
               uri_path {}
@@ -50,6 +52,16 @@ resource "aws_wafv2_web_acl" "api" {
 
             text_transformation {
               priority = 0
+              type     = "URL_DECODE"
+            }
+
+            text_transformation {
+              priority = 1
+              type     = "NORMALIZE_PATH"
+            }
+
+            text_transformation {
+              priority = 2
               type     = "LOWERCASE"
             }
           }

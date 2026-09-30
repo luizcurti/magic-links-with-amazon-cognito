@@ -16,11 +16,17 @@ const NOW_S = NOW.getTime() / 1000;
 class InMemoryRepository {
   items = new Map<string, MagicLinkRecord>();
 
-  async save(link: NewMagicLink, cooldownStart: number): Promise<boolean> {
+  async save(link: NewMagicLink, cooldownStart: number, requestedAt?: number): Promise<boolean> {
     const previous = this.items.get(link.email);
     if (previous && !previous.used && previous.createdAt > cooldownStart) return false;
+    if (previous && requestedAt !== undefined && previous.createdAt > requestedAt) return false;
     this.items.set(link.email, { pk: `EMAIL#${link.email}`, ...link, used: false });
     return true;
+  }
+
+  async deleteUndelivered(email: string, tokenHash: string) {
+    const item = this.items.get(email);
+    if (item && !item.used && item.tokenHash === tokenHash) this.items.delete(email);
   }
 
   async findByEmail(email: string) {
@@ -39,12 +45,14 @@ class InMemoryRepository {
 
 class CapturingEmailSender implements EmailSender {
   sent: MagicLinkEmail[] = [];
+  failure: Error | undefined;
   async sendMagicLink(email: MagicLinkEmail) {
+    if (this.failure) throw this.failure;
     this.sent.push(email);
   }
   lastToken(): string {
     const link = this.sent.at(-1)?.magicLink;
-    return new URL(link!).searchParams.get("token")!;
+    return new URLSearchParams(new URL(link!).hash.slice(1)).get("token")!;
   }
 }
 
@@ -97,7 +105,7 @@ describe("MagicLinkService", () => {
       expect(email?.to).toBe(EMAIL);
       expect(email?.expiresInMinutes).toBe(10);
       expect(email?.magicLink).toMatch(
-        /^http:\/\/localhost:5173\/auth\/callback\?email=luiz%40example\.com&token=[0-9a-f]{64}$/,
+        /^http:\/\/localhost:5173\/auth\/callback#email=luiz%40example\.com&token=[0-9a-f]{64}$/,
       );
     });
 
@@ -105,6 +113,18 @@ describe("MagicLinkService", () => {
       const verifyOnly = new MagicLinkService({ repository: repository as unknown as MagicLinkRepository });
       await expect(verifyOnly.requestMagicLink(EMAIL)).rejects.toThrow("needs an emailSender and callbackUrl");
       expect(repository.items.size).toBe(0);
+    });
+  });
+
+  describe("delivery failure", () => {
+    it("drops the undelivered link, so a retry sends a new one instead of hitting the cooldown", async () => {
+      emailSender.failure = new Error("SES is down");
+      await expect(service.requestMagicLink(EMAIL)).rejects.toThrow("SES is down");
+      expect(repository.items.size).toBe(0);
+
+      emailSender.failure = undefined;
+      await expect(service.requestMagicLink(EMAIL)).resolves.toMatchObject({ status: "SENT" });
+      expect(emailSender.sent).toHaveLength(1);
     });
   });
 
@@ -135,6 +155,33 @@ describe("MagicLinkService", () => {
       await expect(service.requestMagicLink(EMAIL)).resolves.toMatchObject({ status: "SENT" });
     });
 
+    it("a late request never replaces a link issued after it was made", async () => {
+      // Request A at 12:00:00 fails and is retried by SQS; meanwhile request B
+      // (12:00:10) delivered a link. A's retry lands well past the cooldown.
+      const requestA = NOW_S;
+      now = new Date(NOW.getTime() + 10_000);
+      await service.requestMagicLink(EMAIL, NOW_S + 10);
+      const linkB = emailSender.lastToken();
+
+      now = new Date(NOW.getTime() + 130_000);
+      await expect(service.requestMagicLink(EMAIL, requestA)).resolves.toEqual({ status: "COOLDOWN" });
+
+      expect(emailSender.sent).toHaveLength(1);
+      await expect(service.consumeMagicLink(EMAIL, linkB)).resolves.toBe("VALID");
+    });
+
+    it("a request made after the previous link still gets a new one once the cooldown allows", async () => {
+      await service.requestMagicLink(EMAIL, NOW_S);
+      now = new Date(NOW.getTime() + 61_000);
+      await expect(service.requestMagicLink(EMAIL, NOW_S + 61)).resolves.toMatchObject({ status: "SENT" });
+    });
+
+    it("a user who used their link can ask for another within the same second", async () => {
+      await service.requestMagicLink(EMAIL, NOW_S);
+      await service.consumeMagicLink(EMAIL, emailSender.lastToken());
+      await expect(service.requestMagicLink(EMAIL, NOW_S)).resolves.toMatchObject({ status: "SENT" });
+    });
+
     it("applies per email, not globally", async () => {
       await service.requestMagicLink(EMAIL);
       await expect(service.requestMagicLink("other@example.com")).resolves.toMatchObject({ status: "SENT" });
@@ -161,6 +208,17 @@ describe("MagicLinkService", () => {
     it("rejects an invalid token", async () => {
       await service.requestMagicLink(EMAIL);
       await expect(service.consumeMagicLink(EMAIL, "0".repeat(64))).resolves.toBe("TOKEN_MISMATCH");
+    });
+
+    it("can be checked without being consumed", async () => {
+      await service.requestMagicLink(EMAIL);
+      const token = emailSender.lastToken();
+
+      await expect(service.checkMagicLink(EMAIL, token)).resolves.toBe("VALID");
+      await expect(service.checkMagicLink(EMAIL, "0".repeat(64))).resolves.toBe("TOKEN_MISMATCH");
+      await expect(service.checkMagicLink(EMAIL, "nope")).resolves.toBe("INVALID_FORMAT");
+      await expect(service.consumeMagicLink(EMAIL, token)).resolves.toBe("VALID");
+      await expect(service.checkMagicLink(EMAIL, token)).resolves.toBe("ALREADY_USED");
     });
 
     it("rejects malformed tokens without touching the database", async () => {

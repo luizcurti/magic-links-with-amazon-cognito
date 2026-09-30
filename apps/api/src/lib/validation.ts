@@ -14,6 +14,12 @@ export const loginRequestSchema = z.object({
   email: emailSchema,
 });
 
+/** A POST /login request as queued for the send-magic-link worker. */
+export const queuedLoginRequestSchema = loginRequestSchema.extend({
+  // Optional: messages queued before this field existed are still processed.
+  requestedAt: z.number().int().positive().optional(),
+});
+
 export const verifyRequestSchema = z.object({
   email: emailSchema,
   token: z.string({ error: "token is required" }).regex(TOKEN_PATTERN, { error: "token has an invalid format" }),

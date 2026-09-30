@@ -1,5 +1,7 @@
 flowchart TD
-    A["VerifyAuthChallengeResponse<br/>email from Cognito, token from client"] --> F{"token is 64 hex chars?"}
+    A["VerifyAuthChallengeResponse<br/>email from Cognito, token from client"] --> Z{"known user with an email?"}
+    Z -- "no (userNotFound: decoy challenge)" --> R0["answerCorrect = false<br/>(table not touched)"]
+    Z -- yes --> F{"token is 64 hex chars?"}
     F -- no --> R1["INVALID_FORMAT"]
     F -- yes --> G["GetItem EMAIL#email<br/>(strongly consistent)"]
     G --> N{"record exists?"}

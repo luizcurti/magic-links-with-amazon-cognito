@@ -1,6 +1,6 @@
 import { CognitoIdentityProviderClient, InitiateAuthCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { expect, type Page, test } from "@playwright/test";
-import { LOCALSTACK_ENDPOINT, loadStack, uniqueEmail, waitForMagicLink } from "../integration/stack.js";
+import { LOCALSTACK_ENDPOINT, linkParams, loadStack, uniqueEmail, waitForMagicLink } from "../integration/stack.js";
 
 const cognito = new CognitoIdentityProviderClient({
   endpoint: LOCALSTACK_ENDPOINT,
@@ -37,7 +37,13 @@ const expireStoredSession = (page: Page) =>
   });
 
 /** The link opened in the browser, i.e. what the user clicks in their inbox. */
-const inBrowser = (link: URL) => `${link.pathname}${link.search}`;
+const inBrowser = (link: URL) => `${link.pathname}${link.hash}`;
+
+/** Opens the link and confirms the sign-in, as the user does. */
+async function openAndConfirm(page: Page, link: URL) {
+  await page.goto(inBrowser(link));
+  await page.getByRole("button", { name: "Sign in" }).click();
+}
 
 test.describe("happy path", () => {
   test("sign in with a magic link, see the profile, sign out", async ({ page }) => {
@@ -45,6 +51,8 @@ test.describe("happy path", () => {
     const link = await requestLinkInBrowser(page, email);
 
     await page.goto(inBrowser(link));
+    await expect(page.getByText(`Sign in as ${email}?`)).toBeVisible();
+    await page.getByRole("button", { name: "Sign in" }).click();
 
     await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
     await expect(page.getByText(email, { exact: true })).toBeVisible();
@@ -72,7 +80,7 @@ test.describe("happy path", () => {
   test("an expired session is renewed silently", async ({ page }) => {
     const email = uniqueEmail("renew");
     const link = await requestLinkInBrowser(page, email);
-    await page.goto(inBrowser(link));
+    await openAndConfirm(page, link);
     await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
 
     await expireStoredSession(page);
@@ -89,11 +97,19 @@ test.describe("happy path", () => {
   test("the token never stays in the address bar or history", async ({ page }) => {
     const link = await requestLinkInBrowser(page, uniqueEmail("history"));
 
-    await page.goto(inBrowser(link));
+    await openAndConfirm(page, link);
     await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
 
     await page.goBack();
     expect(page.url()).not.toContain("token=");
+  });
+
+  test("no other site can frame the app (clickjacking the Sign in button)", async ({ page }) => {
+    const response = await page.goto("/auth/callback");
+    const headers = response?.headers() ?? {};
+
+    expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(headers["x-frame-options"]).toBe("DENY");
   });
 
   test("the page never sends the link in a Referer header", async ({ page }) => {
@@ -105,7 +121,7 @@ test.describe("happy path", () => {
 test.describe("sad path", () => {
   test("a session revoked elsewhere cannot be renewed and goes back to login", async ({ page, request }) => {
     const link = await requestLinkInBrowser(page, uniqueEmail("revoked"));
-    await page.goto(inBrowser(link));
+    await openAndConfirm(page, link);
     await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
 
     // Sign out from "another device": revoke the same refresh token through the API.
@@ -121,13 +137,31 @@ test.describe("sad path", () => {
     expect(await page.evaluate(() => sessionStorage.getItem("magic-links.session"))).toBeNull();
   });
 
+  test("opening a link does not use it: a mail scanner visiting it cannot burn it", async ({ page, browser }) => {
+    const link = await requestLinkInBrowser(page, uniqueEmail("scanner"));
+    let verifyCalls = 0;
+
+    const scanner = await browser.newPage();
+    scanner.on("request", (request) => {
+      if (request.url().includes("/api/auth/verify")) verifyCalls++;
+    });
+    await scanner.goto(`http://localhost:5173${inBrowser(link)}`);
+    await expect(scanner.getByRole("heading", { name: "Confirm sign-in" })).toBeVisible();
+    await scanner.close();
+    expect(verifyCalls).toBe(0);
+
+    await openAndConfirm(page, link);
+    await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
+  });
+
   test("a link opened twice works only the first time", async ({ page, browser }) => {
     const link = await requestLinkInBrowser(page, uniqueEmail("twice"));
-    await page.goto(inBrowser(link));
+    await openAndConfirm(page, link);
     await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
 
     const other = await browser.newPage();
     await other.goto(`http://localhost:5173${inBrowser(link)}`);
+    await other.getByRole("button", { name: "Sign in" }).click();
 
     await expect(other.getByText("This link is invalid, expired or has already been used.")).toBeVisible();
     expect(other.url()).not.toContain("token=");
@@ -136,9 +170,11 @@ test.describe("sad path", () => {
 
   test("a tampered token is rejected and the user can start over", async ({ page }) => {
     const link = await requestLinkInBrowser(page, uniqueEmail("tampered"));
-    link.searchParams.set("token", "0".repeat(64));
+    const params = linkParams(link);
+    params.set("token", "0".repeat(64));
+    link.hash = params.toString();
 
-    await page.goto(inBrowser(link));
+    await openAndConfirm(page, link);
 
     await expect(page.getByRole("heading", { name: "Sign-in failed" })).toBeVisible();
     await page.getByRole("button", { name: "Request a new link" }).click();
@@ -151,7 +187,7 @@ test.describe("sad path", () => {
       if (request.url().includes("/api/auth/verify")) verifyCalls++;
     });
 
-    await page.goto("/auth/callback?email=someone%40example.com");
+    await page.goto("/auth/callback#email=someone%40example.com");
 
     await expect(page.getByText("This link is incomplete. Please request a new one.")).toBeVisible();
     expect(verifyCalls).toBe(0);

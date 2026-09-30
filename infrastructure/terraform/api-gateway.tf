@@ -195,7 +195,8 @@ resource "aws_api_gateway_stage" "main" {
 }
 
 # Stage-wide limits cap total traffic, and with it Lambda concurrency. Limits
-# per client live in the WAF (waf.tf), limits per email in the login Lambda.
+# per client live in the WAF (waf.tf), limits per email in the send-magic-link
+# worker.
 resource "aws_api_gateway_method_settings" "all" {
   rest_api_id = aws_api_gateway_rest_api.main.id
   stage_name  = aws_api_gateway_stage.main.stage_name
@@ -206,6 +207,22 @@ resource "aws_api_gateway_method_settings" "all" {
     metrics_enabled        = true
     throttling_rate_limit  = var.api_throttle_rate_limit
     throttling_burst_limit = var.api_throttle_burst_limit
+  }
+}
+
+# /login has its own, lower budget: a flood of link requests (the cheapest
+# route to abuse) exhausts only it, and users already holding a link or a
+# session can still verify, refresh, call /me and sign out.
+resource "aws_api_gateway_method_settings" "login" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  stage_name  = aws_api_gateway_stage.main.stage_name
+  method_path = "${aws_api_gateway_resource.login.path_part}/${aws_api_gateway_method.login_post.http_method}"
+
+  settings {
+    logging_level          = "ERROR"
+    metrics_enabled        = true
+    throttling_rate_limit  = var.login_throttle_rate_limit
+    throttling_burst_limit = var.login_throttle_burst_limit
   }
 }
 

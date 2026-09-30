@@ -9,7 +9,7 @@ services:
       - "127.0.0.1:4510-4559:4510-4559"  # external service ports
     environment:
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?Set LOCALSTACK_AUTH_TOKEN in .env (see .env.example)}
-      SERVICES: apigateway,cognito-idp,dynamodb,iam,kms,lambda,logs,ses,sts,wafv2
+      SERVICES: apigateway,cognito-idp,dynamodb,iam,kms,lambda,logs,ses,sqs,sts,wafv2
       AWS_DEFAULT_REGION: us-east-1
       # Lambdas run as sibling containers on this Docker daemon.
       LAMBDA_DOCKER_NETWORK: magic-links

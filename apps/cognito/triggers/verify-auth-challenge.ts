@@ -17,7 +17,8 @@ export const handler: VerifyAuthChallengeResponseTriggerHandler = async (event) 
   const email = event.request.userAttributes.email?.toLowerCase();
   const token = event.request.challengeAnswer;
 
-  if (!email) {
+  // Unknown users get a decoy challenge (see DefineAuthChallenge); no answer is ever right.
+  if (event.request.userNotFound || !email) {
     event.response.answerCorrect = false;
     return event;
   }

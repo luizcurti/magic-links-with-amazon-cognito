@@ -13,6 +13,7 @@ locals {
   # One role per function, each with only the permissions it needs.
   lambda_roles = toset([
     "login",
+    "send-magic-link",
     "auth-callback",
     "me",
     "logout",
@@ -58,17 +59,32 @@ data "aws_iam_policy_document" "table_kms" {
   }
 }
 
-# login: create (or repair) the Cognito user, store the token hash, send the email.
+# login: only queue the request.
 data "aws_iam_policy_document" "login" {
+  statement {
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.login_requests.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "login" {
+  name   = "login"
+  role   = aws_iam_role.lambda["login"].id
+  policy = data.aws_iam_policy_document.login.json
+}
+
+# send-magic-link: consume the queue, store the token hash (or drop an
+# undelivered one), send the email.
+data "aws_iam_policy_document" "send_magic_link" {
   source_policy_documents = [data.aws_iam_policy_document.table_kms.json]
 
   statement {
-    actions   = ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser", "cognito-idp:AdminSetUserPassword"]
-    resources = [aws_cognito_user_pool.main.arn]
+    actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+    resources = [aws_sqs_queue.login_requests.arn]
   }
 
   statement {
-    actions   = ["dynamodb:PutItem"]
+    actions   = ["dynamodb:PutItem", "dynamodb:DeleteItem"]
     resources = [aws_dynamodb_table.magic_links.arn]
   }
 
@@ -78,10 +94,33 @@ data "aws_iam_policy_document" "login" {
   }
 }
 
-resource "aws_iam_role_policy" "login" {
-  name   = "login"
-  role   = aws_iam_role.lambda["login"].id
-  policy = data.aws_iam_policy_document.login.json
+resource "aws_iam_role_policy" "send_magic_link" {
+  name   = "send-magic-link"
+  role   = aws_iam_role.lambda["send-magic-link"].id
+  policy = data.aws_iam_policy_document.send_magic_link.json
+}
+
+# auth-callback: check the link (read-only), then create (or repair) the
+# Cognito user of whoever proved they own the address. InitiateAuth and
+# RespondToAuthChallenge are public Cognito APIs and need no permission.
+data "aws_iam_policy_document" "auth_callback" {
+  source_policy_documents = [data.aws_iam_policy_document.table_kms.json]
+
+  statement {
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.magic_links.arn]
+  }
+
+  statement {
+    actions   = ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser", "cognito-idp:AdminSetUserPassword"]
+    resources = [aws_cognito_user_pool.main.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "auth_callback" {
+  name   = "auth-callback"
+  role   = aws_iam_role.lambda["auth-callback"].id
+  policy = data.aws_iam_policy_document.auth_callback.json
 }
 
 # verify-auth-challenge: read the link and atomically mark it as used.
@@ -100,6 +139,6 @@ resource "aws_iam_role_policy" "verify_auth_challenge" {
   policy = data.aws_iam_policy_document.verify_auth_challenge.json
 }
 
-# auth-callback (InitiateAuth / RespondToAuthChallenge), refresh (InitiateAuth) and logout (RevokeToken)
-# only call public, unauthenticated Cognito APIs, so they need no extra permissions.
+# refresh (InitiateAuth) and logout (RevokeToken) only call public,
+# unauthenticated Cognito APIs, so they need no extra permissions.
 # define/create-auth-challenge and me call no AWS API: logs and X-Ray only.

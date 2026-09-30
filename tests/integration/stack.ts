@@ -1,10 +1,12 @@
 import { execSync } from "node:child_process";
+import { GetQueueAttributesCommand, SQSClient } from "@aws-sdk/client-sqs";
 
 export interface StackOutputs {
   apiUrl: string;
   tableName: string;
   userPoolId: string;
   clientId: string;
+  loginQueueUrl: string;
 }
 
 export const LOCALSTACK_ENDPOINT = process.env.LOCALSTACK_ENDPOINT ?? "http://localhost:4566";
@@ -22,6 +24,7 @@ export function loadStack(): StackOutputs | undefined {
       tableName: outputs.magic_links_table!.value,
       userPoolId: outputs.user_pool_id!.value,
       clientId: outputs.user_pool_client_id!.value,
+      loginQueueUrl: outputs.login_queue_url!.value,
     };
   } catch {
     return undefined;
@@ -67,8 +70,26 @@ export async function countEmails(email: string): Promise<number> {
   return (await sesMessages()).filter((m) => m.Destination?.ToAddresses?.includes(email)).length;
 }
 
-/** Polls LocalStack's SES capture endpoint for the newest magic link sent to `email`. */
-export async function waitForMagicLink(email: string, after: Date, timeoutMs = 10_000): Promise<URL> {
+const magicLinkIn = (message: SesMessage | undefined) =>
+  message?.Body?.text_part?.match(/https?:\/\/\S+token=[0-9a-f]{64}/)?.[0];
+
+/** The newest magic link already delivered to `email`, if any. */
+export async function latestMagicLink(email: string): Promise<string | undefined> {
+  const messages = (await sesMessages()).filter((m) => m.Destination?.ToAddresses?.includes(email));
+  return magicLinkIn(messages.sort((a, b) => sentAt(a) - sentAt(b)).at(-1));
+}
+
+/**
+ * Polls LocalStack's SES capture endpoint for the newest magic link sent to
+ * `email`. Emails are sent asynchronously (SQS worker), so pass the link that
+ * was already there before the request as `previous` to wait for a new one.
+ */
+export async function waitForMagicLink(
+  email: string,
+  after: Date,
+  timeoutMs = 10_000,
+  previous?: string,
+): Promise<URL> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -77,8 +98,8 @@ export async function waitForMagicLink(email: string, after: Date, timeoutMs = 1
       .sort((a, b) => sentAt(a) - sentAt(b))
       .at(-1);
 
-    const link = latest?.Body?.text_part?.match(/https?:\/\/\S+token=[0-9a-f]{64}/)?.[0];
-    if (link) return new URL(link);
+    const link = magicLinkIn(latest);
+    if (link && link !== previous) return new URL(link);
 
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -86,5 +107,44 @@ export async function waitForMagicLink(email: string, after: Date, timeoutMs = 1
   throw new Error(`No magic link for ${email} within ${timeoutMs}ms`);
 }
 
+/** Email and token travel in the link's fragment: `…/auth/callback#email=…&token=…`. */
+export const linkParams = (link: URL) => new URLSearchParams(link.hash.slice(1));
+
 export const uniqueEmail = (label: string) =>
   `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
+
+const sqs = new SQSClient({
+  endpoint: LOCALSTACK_ENDPOINT,
+  region: "us-east-1",
+  credentials: { accessKeyId: "test", secretAccessKey: "test" },
+});
+
+/**
+ * Waits until the login queue is empty: nothing waiting and nothing in flight.
+ * SQS deletes a message only after the worker returned successfully, so by
+ * then every email the queued requests were going to send has been sent, and
+ * "no extra email" can be asserted for real instead of after an arbitrary sleep.
+ * Several consecutive empty reads are required, as the counts are approximate.
+ */
+export async function waitForQueueDrained(queueUrl: string, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let emptyReads = 0;
+
+  while (Date.now() < deadline) {
+    const { Attributes = {} } = await sqs.send(
+      new GetQueueAttributesCommand({
+        QueueUrl: queueUrl,
+        AttributeNames: ["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+      }),
+    );
+    const pending =
+      Number(Attributes.ApproximateNumberOfMessages ?? 0) +
+      Number(Attributes.ApproximateNumberOfMessagesNotVisible ?? 0);
+    emptyReads = pending === 0 ? emptyReads + 1 : 0;
+    if (emptyReads >= 3) return;
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(`The login queue was not drained within ${timeoutMs}ms`);
+}

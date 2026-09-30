@@ -3,7 +3,7 @@ TF    := terraform -chdir=infrastructure/terraform
 EMAIL ?= luiz@example.com
 
 .DEFAULT_GOAL := help
-.PHONY: help install up down logs build infra destroy outputs env login emails link verify demo frontend test test-integration test-api test-e2e lint typecheck tf-scan check clean
+.PHONY: help install up down logs build infra destroy outputs env login emails link verify demo frontend test test-integration test-api test-e2e lint typecheck tf-scan check clean aws-infra aws-destroy test-aws
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -90,6 +90,17 @@ tf-scan: ## Static analysis for Terraform (needs tflint and checkov installed)
 check: lint typecheck test ## Lint, typecheck, unit tests and Terraform validation
 	$(TF) fmt -check -recursive
 	$(TF) validate
+
+aws-infra: build ## Deploy to a REAL AWS account (Terraform workspace "aws"; costs money, see README)
+	$(TF) init -input=false -upgrade=false
+	@$(TF) workspace new aws >/dev/null 2>&1 && $(TF) workspace select default >/dev/null || true
+	TF_WORKSPACE=aws $(TF) apply -input=false -var target=aws $(AWS_TF_VARS)
+
+aws-destroy: ## Destroy the real AWS deployment
+	TF_WORKSPACE=aws $(TF) destroy -input=false -var target=aws $(AWS_TF_VARS)
+
+test-aws: ## Smoke-test what LocalStack does not enforce, against the real AWS deployment
+	npm run test:aws
 
 clean: ## Remove build artifacts
 	rm -rf dist coverage apps/frontend/dist infrastructure/terraform/.build test-results playwright-report

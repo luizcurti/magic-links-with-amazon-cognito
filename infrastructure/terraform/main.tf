@@ -13,29 +13,35 @@ terraform {
   }
 }
 
-# Every AWS API is redirected to LocalStack. To deploy to real AWS instead,
-# remove the dummy credentials, the skip_* flags and the endpoints block.
+# target = "localstack" (default) redirects every AWS API to LocalStack with
+# dummy credentials. target = "aws" uses the default credential chain and the
+# real endpoints; keep its state apart (`make aws-infra` uses the "aws"
+# workspace) so it never mixes with the disposable LocalStack state.
 provider "aws" {
   region     = var.region
-  access_key = "test"
-  secret_key = "test"
+  access_key = local.localstack ? "test" : null
+  secret_key = local.localstack ? "test" : null
 
-  skip_credentials_validation = true
-  skip_metadata_api_check     = true
-  skip_requesting_account_id  = true
-  s3_use_path_style           = true
+  skip_credentials_validation = local.localstack
+  skip_metadata_api_check     = local.localstack
+  skip_requesting_account_id  = local.localstack
+  s3_use_path_style           = local.localstack
 
-  endpoints {
-    apigateway = var.localstack_endpoint
-    cognitoidp = var.localstack_endpoint
-    dynamodb   = var.localstack_endpoint
-    iam        = var.localstack_endpoint
-    kms        = var.localstack_endpoint
-    lambda     = var.localstack_endpoint
-    logs       = var.localstack_endpoint
-    ses        = var.localstack_endpoint
-    sts        = var.localstack_endpoint
-    wafv2      = var.localstack_endpoint
+  dynamic "endpoints" {
+    for_each = local.localstack ? [var.localstack_endpoint] : []
+    content {
+      apigateway = endpoints.value
+      cognitoidp = endpoints.value
+      dynamodb   = endpoints.value
+      iam        = endpoints.value
+      kms        = endpoints.value
+      lambda     = endpoints.value
+      logs       = endpoints.value
+      ses        = endpoints.value
+      sqs        = endpoints.value
+      sts        = endpoints.value
+      wafv2      = endpoints.value
+    }
   }
 
   default_tags {
@@ -47,5 +53,12 @@ provider "aws" {
 }
 
 locals {
-  name = var.project_name
+  name       = var.project_name
+  localstack = var.target == "localstack"
+
+  # The `iss` claim of the pool's tokens; its JWKS is at <issuer>/.well-known/jwks.json.
+  cognito_issuer = (local.localstack
+    ? "${var.localstack_cognito_issuer_base}/${aws_cognito_user_pool.main.id}"
+    : "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.main.id}"
+  )
 }

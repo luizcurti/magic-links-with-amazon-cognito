@@ -26,7 +26,10 @@ describe("CognitoService", () => {
   beforeEach(() => cognito.reset());
 
   describe("ensureUser", () => {
-    it("creates the user without sending Cognito's own email", async () => {
+    const notFound = () => new UserNotFoundException({ message: "User does not exist.", $metadata: {} });
+
+    it("creates the user with a verified email, without sending Cognito's own email", async () => {
+      cognito.on(AdminGetUserCommand).rejects(notFound());
       cognito.on(AdminCreateUserCommand).resolves({});
       await service.ensureUser(EMAIL);
 
@@ -34,11 +37,15 @@ describe("CognitoService", () => {
         UserPoolId: "pool-id",
         Username: EMAIL,
         MessageAction: "SUPPRESS",
-        UserAttributes: [{ Name: "email", Value: EMAIL }],
+        UserAttributes: [
+          { Name: "email", Value: EMAIL },
+          { Name: "email_verified", Value: "true" },
+        ],
       });
     });
 
     it("confirms a new user with a random, unshared permanent password", async () => {
+      cognito.on(AdminGetUserCommand).rejects(notFound());
       cognito.on(AdminCreateUserCommand).resolves({});
       cognito.on(AdminSetUserPasswordCommand).resolves({});
       await service.ensureUser(EMAIL);
@@ -50,16 +57,36 @@ describe("CognitoService", () => {
       expect(first?.Password).not.toBe(second?.Password);
     });
 
-    it("is idempotent for existing users and leaves their account untouched", async () => {
-      cognito.on(AdminCreateUserCommand).rejects(new UsernameExistsException({ message: "exists", $metadata: {} }));
+    it("costs a returning user a single lookup and leaves their account untouched", async () => {
       cognito.on(AdminGetUserCommand).resolves({ Username: EMAIL, UserStatus: "CONFIRMED" });
+
+      await expect(service.ensureUser(EMAIL)).resolves.toBeUndefined();
+      expect(cognito.calls()).toHaveLength(1);
+      expect(cognito.commandCalls(AdminCreateUserCommand)).toHaveLength(0);
+      expect(cognito.commandCalls(AdminSetUserPasswordCommand)).toHaveLength(0);
+    });
+
+    it("handles losing a race with a parallel first sign-in", async () => {
+      cognito.on(AdminGetUserCommand).rejectsOnce(notFound()).resolves({ Username: EMAIL, UserStatus: "CONFIRMED" });
+      cognito.on(AdminCreateUserCommand).rejects(new UsernameExistsException({ message: "exists", $metadata: {} }));
 
       await expect(service.ensureUser(EMAIL)).resolves.toBeUndefined();
       expect(cognito.commandCalls(AdminSetUserPasswordCommand)).toHaveLength(0);
     });
 
-    it("repairs a user left in FORCE_CHANGE_PASSWORD by an earlier failed request", async () => {
+    it("confirms the user when the parallel sign-in that created it has not yet", async () => {
+      cognito
+        .on(AdminGetUserCommand)
+        .rejectsOnce(notFound())
+        .resolves({ Username: EMAIL, UserStatus: "FORCE_CHANGE_PASSWORD" });
       cognito.on(AdminCreateUserCommand).rejects(new UsernameExistsException({ message: "exists", $metadata: {} }));
+      cognito.on(AdminSetUserPasswordCommand).resolves({});
+
+      await service.ensureUser(EMAIL);
+      expect(cognito.commandCalls(AdminSetUserPasswordCommand)).toHaveLength(1);
+    });
+
+    it("repairs a user left in FORCE_CHANGE_PASSWORD by an earlier failed request", async () => {
       cognito.on(AdminGetUserCommand).resolves({ Username: EMAIL, UserStatus: "FORCE_CHANGE_PASSWORD" });
       cognito.on(AdminSetUserPasswordCommand).resolves({});
 
@@ -72,14 +99,22 @@ describe("CognitoService", () => {
     });
 
     it("fails when the new user cannot be confirmed", async () => {
+      cognito.on(AdminGetUserCommand).rejects(notFound());
       cognito.on(AdminCreateUserCommand).resolves({});
       cognito.on(AdminSetUserPasswordCommand).rejects(new Error("password rejected"));
       await expect(service.ensureUser(EMAIL)).rejects.toThrow("password rejected");
     });
 
     it("propagates unexpected Cognito errors", async () => {
+      cognito.on(AdminGetUserCommand).rejects(notFound());
       cognito.on(AdminCreateUserCommand).rejects(new Error("throttled"));
       await expect(service.ensureUser(EMAIL)).rejects.toThrow("throttled");
+    });
+
+    it("propagates unexpected errors from the lookup", async () => {
+      cognito.on(AdminGetUserCommand).rejects(new Error("throttled"));
+      await expect(service.ensureUser(EMAIL)).rejects.toThrow("throttled");
+      expect(cognito.commandCalls(AdminCreateUserCommand)).toHaveLength(0);
     });
   });
 

@@ -39,10 +39,13 @@ export class CognitoService {
   ) {}
 
   /**
-   * Makes sure a Cognito user exists for this email (implicit sign-up).
-   * Uses create-and-catch instead of get-then-create to avoid a race and an
-   * extra round trip. MessageAction=SUPPRESS stops Cognito from sending its
-   * own invitation email — our magic link is the only email the user gets.
+   * Makes sure a Cognito user exists for this email (implicit sign-up). It
+   * runs on every sign-in, so it looks the user up first: a returning user
+   * costs one AdminGetUser, and AdminCreateUser (the lowest Cognito admin
+   * quota) is only called for new users. Two first sign-ins racing are safe:
+   * the loser gets UsernameExistsException and re-reads the status.
+   * MessageAction=SUPPRESS stops Cognito from sending its own invitation
+   * email — our magic link is the only email the user gets.
    *
    * AdminCreateUser leaves the user in FORCE_CHANGE_PASSWORD, and Cognito does
    * not let such users sign in until they set a password. Setting a random
@@ -51,10 +54,15 @@ export class CognitoService {
    *
    * If a previous request created the user but failed before confirming it,
    * the next request finds it still in FORCE_CHANGE_PASSWORD and repairs it.
+   *
+   * The email is created as verified: tokens are only ever issued to someone
+   * who clicked a link sent to it, and users cannot change it (the app client
+   * has no write access to `email`), so every token proves ownership.
    */
   async ensureUser(email: string): Promise<void> {
-    const created = await this.createUser(email);
-    if (!created && (await this.userStatus(email)) !== "FORCE_CHANGE_PASSWORD") return;
+    let status = await this.userStatus(email);
+    if (status === undefined && !(await this.createUser(email))) status = await this.userStatus(email);
+    if (status !== undefined && status !== "FORCE_CHANGE_PASSWORD") return;
 
     await this.client.send(
       new AdminSetUserPasswordCommand({
@@ -74,7 +82,10 @@ export class CognitoService {
           UserPoolId: this.userPoolId,
           Username: email,
           MessageAction: "SUPPRESS",
-          UserAttributes: [{ Name: "email", Value: email }],
+          UserAttributes: [
+            { Name: "email", Value: email },
+            { Name: "email_verified", Value: "true" },
+          ],
         }),
       );
       return true;
@@ -84,9 +95,15 @@ export class CognitoService {
     }
   }
 
+  /** @returns undefined when there is no such user. */
   private async userStatus(email: string): Promise<string | undefined> {
-    const user = await this.client.send(new AdminGetUserCommand({ UserPoolId: this.userPoolId, Username: email }));
-    return user.UserStatus;
+    try {
+      const user = await this.client.send(new AdminGetUserCommand({ UserPoolId: this.userPoolId, Username: email }));
+      return user.UserStatus;
+    } catch (error) {
+      if (error instanceof UserNotFoundException) return undefined;
+      throw error;
+    }
   }
 
   /**

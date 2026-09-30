@@ -1,5 +1,11 @@
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { type DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  DeleteCommand,
+  type DynamoDBDocumentClient,
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
 
 /**
  * One item per email address. Issuing a new link (once the cooldown allows it)
@@ -34,23 +40,58 @@ export class MagicLinkRepository {
    * check and the write are one atomic operation, so parallel requests cannot
    * slip past the cooldown.
    *
-   * @returns false when the cooldown prevented the write.
+   * With `requestedAt` (epoch seconds, when the user asked), a link created
+   * after that second is never replaced: a request that reaches the worker
+   * late (an SQS retry, a duplicate delivery, a backed-up queue) must not
+   * invalidate a newer link the user may be about to click.
+   *
+   * @returns false when the cooldown, or a newer link, prevented the write.
    */
-  async save(link: NewMagicLink, cooldownStart: number): Promise<boolean> {
+  async save(link: NewMagicLink, cooldownStart: number, requestedAt?: number): Promise<boolean> {
     const record: MagicLinkRecord = { pk: emailKey(link.email), ...link, used: false };
+    const replaceable = "(#used = :true OR createdAt <= :cooldownStart)";
     try {
       await this.db.send(
         new PutCommand({
           TableName: this.tableName,
           Item: record,
-          ConditionExpression: "attribute_not_exists(pk) OR #used = :true OR createdAt <= :cooldownStart",
+          ConditionExpression:
+            requestedAt === undefined
+              ? `attribute_not_exists(pk) OR ${replaceable}`
+              : `attribute_not_exists(pk) OR (${replaceable} AND createdAt <= :requestedAt)`,
           ExpressionAttributeNames: { "#used": "used" },
-          ExpressionAttributeValues: { ":true": true, ":cooldownStart": cooldownStart },
+          ExpressionAttributeValues: {
+            ":true": true,
+            ":cooldownStart": cooldownStart,
+            ...(requestedAt === undefined ? {} : { ":requestedAt": requestedAt }),
+          },
         }),
       );
       return true;
     } catch (error) {
       if (error instanceof ConditionalCheckFailedException) return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Removes a link that could not be delivered, so the cooldown does not keep
+   * the user from getting another one. Only the link with this exact hash is
+   * removed: a newer link stored in the meantime is left alone.
+   */
+  async deleteUndelivered(email: string, tokenHash: string): Promise<void> {
+    try {
+      await this.db.send(
+        new DeleteCommand({
+          TableName: this.tableName,
+          Key: { pk: emailKey(email) },
+          ConditionExpression: "tokenHash = :hash AND #used = :false",
+          ExpressionAttributeNames: { "#used": "used" },
+          ExpressionAttributeValues: { ":hash": tokenHash, ":false": false },
+        }),
+      );
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) return;
       throw error;
     }
   }
