@@ -1,4 +1,5 @@
 import type { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import { logger } from "./logger.js";
 
 const DEFAULT_HEADERS = {
   "Content-Type": "application/json",
@@ -7,12 +8,51 @@ const DEFAULT_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type,Authorization",
 };
 
-export function json(statusCode: number, body: unknown): APIGatewayProxyResult {
+export const RETRY_AFTER_SECONDS = 5;
+
+export function json(statusCode: number, body: unknown, headers: Record<string, string> = {}): APIGatewayProxyResult {
   return {
     statusCode,
-    headers: DEFAULT_HEADERS,
+    headers: { ...DEFAULT_HEADERS, ...headers },
     body: JSON.stringify(body),
   };
+}
+
+export function noContent(): APIGatewayProxyResult {
+  return { statusCode: 204, headers: DEFAULT_HEADERS, body: "" };
+}
+
+/** Error names AWS services use when a caller exceeds a rate limit. */
+const THROTTLING_ERRORS = new Set([
+  "TooManyRequestsException",
+  "ThrottlingException",
+  "Throttling",
+  "ProvisionedThroughputExceededException",
+  "RequestLimitExceeded",
+]);
+
+export const isThrottlingError = (error: unknown): boolean =>
+  error instanceof Error && THROTTLING_ERRORS.has(error.name);
+
+/**
+ * Maps the errors every handler can hit: bad input (400), an AWS dependency
+ * still throttling after the SDK's own retries (429), anything else (500,
+ * without leaking internals).
+ */
+export function errorResponse(error: unknown, failureMessage: string): APIGatewayProxyResult {
+  if (error instanceof BadRequestError) {
+    return json(400, { message: error.message, errors: error.details });
+  }
+  if (isThrottlingError(error)) {
+    logger.warn(`${failureMessage}: throttled by AWS`, { error: String(error) });
+    return json(
+      429,
+      { message: "Too many requests, please try again shortly" },
+      { "Retry-After": String(RETRY_AFTER_SECONDS) },
+    );
+  }
+  logger.error(failureMessage, { error: String(error) });
+  return json(500, { message: "Internal server error" });
 }
 
 export class BadRequestError extends Error {

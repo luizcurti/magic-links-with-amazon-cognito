@@ -1,10 +1,15 @@
 import {
   AdminCreateUserCommand,
+  AdminGetUserCommand,
   AdminSetUserPasswordCommand,
   CognitoIdentityProviderClient,
   InitiateAuthCommand,
   NotAuthorizedException,
   RespondToAuthChallengeCommand,
+  RevokeTokenCommand,
+  TooManyRequestsException,
+  UnauthorizedException,
+  UnsupportedTokenTypeException,
   UserNotFoundException,
   UsernameExistsException,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -47,8 +52,23 @@ describe("CognitoService", () => {
 
     it("is idempotent for existing users and leaves their account untouched", async () => {
       cognito.on(AdminCreateUserCommand).rejects(new UsernameExistsException({ message: "exists", $metadata: {} }));
+      cognito.on(AdminGetUserCommand).resolves({ Username: EMAIL, UserStatus: "CONFIRMED" });
+
       await expect(service.ensureUser(EMAIL)).resolves.toBeUndefined();
       expect(cognito.commandCalls(AdminSetUserPasswordCommand)).toHaveLength(0);
+    });
+
+    it("repairs a user left in FORCE_CHANGE_PASSWORD by an earlier failed request", async () => {
+      cognito.on(AdminCreateUserCommand).rejects(new UsernameExistsException({ message: "exists", $metadata: {} }));
+      cognito.on(AdminGetUserCommand).resolves({ Username: EMAIL, UserStatus: "FORCE_CHANGE_PASSWORD" });
+      cognito.on(AdminSetUserPasswordCommand).resolves({});
+
+      await service.ensureUser(EMAIL);
+
+      expect(cognito.commandCalls(AdminSetUserPasswordCommand)[0]?.args[0].input).toMatchObject({
+        Username: EMAIL,
+        Permanent: true,
+      });
     });
 
     it("fails when the new user cannot be confirmed", async () => {
@@ -145,6 +165,31 @@ describe("CognitoService", () => {
       cognito.on(InitiateAuthCommand).resolves({ ChallengeName: "SMS_MFA", Session: "s" });
       await expect(service.signInWithMagicLink(EMAIL, TOKEN)).rejects.toBeInstanceOf(AuthenticationError);
       expect(cognito.commandCalls(RespondToAuthChallengeCommand)).toHaveLength(0);
+    });
+  });
+
+  describe("revokeRefreshToken", () => {
+    it("revokes the token for this app client", async () => {
+      cognito.on(RevokeTokenCommand).resolves({});
+
+      await expect(service.revokeRefreshToken("refresh")).resolves.toBe(true);
+      expect(cognito.commandCalls(RevokeTokenCommand)[0]?.args[0].input).toEqual({
+        ClientId: "client-id",
+        Token: "refresh",
+      });
+    });
+
+    it.each([
+      ["unknown token", new UnauthorizedException({ message: "invalid", $metadata: {} })],
+      ["not a refresh token", new UnsupportedTokenTypeException({ message: "unsupported", $metadata: {} })],
+    ])("treats an %s as already signed out", async (_label, error) => {
+      cognito.on(RevokeTokenCommand).rejects(error);
+      await expect(service.revokeRefreshToken("garbage")).resolves.toBe(false);
+    });
+
+    it("propagates throttling and other failures", async () => {
+      cognito.on(RevokeTokenCommand).rejects(new TooManyRequestsException({ message: "slow down", $metadata: {} }));
+      await expect(service.revokeRefreshToken("refresh")).rejects.toBeInstanceOf(TooManyRequestsException);
     });
   });
 });

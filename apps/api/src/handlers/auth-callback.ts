@@ -1,7 +1,7 @@
 import type { APIGatewayProxyHandler } from "aws-lambda";
 import { getCognitoClient } from "../lib/aws-clients.js";
 import { requireEnv } from "../lib/env.js";
-import { BadRequestError, json, parseJsonBody } from "../lib/http.js";
+import { errorResponse, json, parseJsonBody } from "../lib/http.js";
 import { logger, maskEmail } from "../lib/logger.js";
 import { validate, verifyRequestSchema } from "../lib/validation.js";
 import { AuthenticationError, CognitoService } from "../services/cognito.service.js";
@@ -26,13 +26,9 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     logger.info("User authenticated with magic link", { email: maskEmail(email) });
     return json(200, tokens);
   } catch (error) {
-    if (error instanceof BadRequestError) {
-      return json(400, { message: error.message, errors: error.details });
-    }
     if (error instanceof AuthenticationError) {
       return json(401, { message: error.message });
     }
-    logger.error("Magic link verification failed unexpectedly", { error: String(error) });
-    return json(500, { message: "Internal server error" });
+    return errorResponse(error, "Magic link verification failed unexpectedly");
   }
 };

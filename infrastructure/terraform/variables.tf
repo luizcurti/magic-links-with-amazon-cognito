@@ -91,3 +91,26 @@ variable "magic_link_cooldown_seconds" {
     error_message = "magic_link_cooldown_seconds must be between 1 and 3600."
   }
 }
+
+variable "waf_rate_window_seconds" {
+  description = "Window over which the WAF counts requests per IP."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([60, 120, 300, 600], var.waf_rate_window_seconds)
+    error_message = "waf_rate_window_seconds must be 60, 120, 300 or 600."
+  }
+}
+
+variable "waf_login_rate_limit" {
+  description = "Maximum POST /login requests per IP within the WAF window."
+  type        = number
+  default     = 10
+}
+
+variable "waf_api_rate_limit" {
+  description = "Maximum requests per IP to the whole API within the WAF window."
+  type        = number
+  default     = 300
+}

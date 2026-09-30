@@ -69,14 +69,56 @@ describe("ProfilePage", () => {
     expect(await screen.findByText("{}")).toBeTruthy();
   });
 
-  it("signs out", async () => {
+  it("signs out without calling the API when there is no refresh token", async () => {
     session.save(TOKENS);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(PROFILE)));
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(PROFILE));
+    vi.stubGlobal("fetch", fetchMock);
     render(<ProfilePage />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
 
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
     expect(session.load()).toBeUndefined();
-    expect(window.location.pathname).toBe("/");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("revokes the refresh token on the server before signing out", async () => {
+    session.save({ ...TOKENS, refreshToken: "refresh-1" });
+    let finishLogout: (response: Response) => void = () => {};
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(PROFILE))
+      .mockReturnValueOnce(new Promise<Response>((resolve) => (finishLogout = resolve)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProfilePage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+
+    expect(await screen.findByRole("button", { name: "Signing out…" })).toHaveProperty("disabled", true);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/logout",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ refreshToken: "refresh-1" }) }),
+    );
+
+    finishLogout(new Response(null, { status: 204 }));
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(session.load()).toBeUndefined();
+  });
+
+  it("still signs out locally when the server cannot revoke", async () => {
+    session.save({ ...TOKENS, refreshToken: "refresh-1" });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(PROFILE))
+        .mockResolvedValueOnce(Response.json({ message: "Too many requests" }, { status: 429 })),
+    );
+    render(<ProfilePage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(session.load()).toBeUndefined();
   });
 });

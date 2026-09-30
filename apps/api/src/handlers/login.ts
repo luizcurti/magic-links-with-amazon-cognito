@@ -1,7 +1,7 @@
 import type { APIGatewayProxyHandler } from "aws-lambda";
 import { getCognitoClient, getDynamoClient, getSesClient } from "../lib/aws-clients.js";
 import { numberEnv, requireEnv } from "../lib/env.js";
-import { BadRequestError, json, parseJsonBody } from "../lib/http.js";
+import { errorResponse, json, parseJsonBody } from "../lib/http.js";
 import { logger, maskEmail } from "../lib/logger.js";
 import { loginRequestSchema, validate } from "../lib/validation.js";
 import { MagicLinkRepository } from "../repositories/magic-link.repository.js";
@@ -47,10 +47,6 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     }
     return json(202, GENERIC_RESPONSE);
   } catch (error) {
-    if (error instanceof BadRequestError) {
-      return json(400, { message: error.message, errors: error.details });
-    }
-    logger.error("Failed to issue magic link", { error: String(error) });
-    return json(500, { message: "Internal server error" });
+    return errorResponse(error, "Failed to issue magic link");
   }
 };

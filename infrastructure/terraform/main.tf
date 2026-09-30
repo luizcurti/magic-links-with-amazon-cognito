@@ -35,6 +35,7 @@ provider "aws" {
     logs       = var.localstack_endpoint
     ses        = var.localstack_endpoint
     sts        = var.localstack_endpoint
+    wafv2      = var.localstack_endpoint
   }
 
   default_tags {

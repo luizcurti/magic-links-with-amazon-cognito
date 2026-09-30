@@ -32,6 +32,14 @@
     {
       "key": "accessToken",
       "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    },
+    {
+      "key": "clientId",
+      "value": ""
     }
   ],
   "item": [
@@ -511,7 +519,8 @@
                   "  pm.expect(body.expiresIn).to.be.above(0);",
                   "});",
                   "pm.collectionVariables.set(\"idToken\", body.idToken);",
-                  "pm.collectionVariables.set(\"accessToken\", body.accessToken);"
+                  "pm.collectionVariables.set(\"accessToken\", body.accessToken);",
+                  "pm.collectionVariables.set(\"refreshToken\", body.refreshToken);"
                 ]
               }
             }
@@ -641,6 +650,181 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test(\"returns 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "POST /logout",
+      "item": [
+        {
+          "name": "400 - refresh token is missing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/logout",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"names the missing field\", () => pm.expect(pm.response.json().errors.map((e) => e.field)).to.include(\"refreshToken\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cognito - refresh token works before sign-out",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-amz-json-1.1"
+              },
+              {
+                "key": "X-Amz-Target",
+                "value": "AWSCognitoIdentityProviderService.InitiateAuth"
+              }
+            ],
+            "url": "{{localstackUrl}}/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"AuthFlow\": \"REFRESH_TOKEN_AUTH\", \"ClientId\": \"{{clientId}}\", \"AuthParameters\": {\"REFRESH_TOKEN\": \"{{refreshToken}}\"}}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"mints new tokens\", () => pm.expect(pm.response.json().AuthenticationResult.AccessToken).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "204 - revokes the refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/logout",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refreshToken\": \"{{refreshToken}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 204\", () => pm.response.to.have.status(204));",
+                  "pm.test(\"has no body\", () => pm.expect(pm.response.text()).to.eql(\"\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cognito - refresh token is rejected after sign-out",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-amz-json-1.1"
+              },
+              {
+                "key": "X-Amz-Target",
+                "value": "AWSCognitoIdentityProviderService.InitiateAuth"
+              }
+            ],
+            "url": "{{localstackUrl}}/",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"AuthFlow\": \"REFRESH_TOKEN_AUTH\", \"ClientId\": \"{{clientId}}\", \"AuthParameters\": {\"REFRESH_TOKEN\": \"{{refreshToken}}\"}}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"is rejected\", () => pm.expect(pm.response.code).to.be.within(400, 499));",
+                  "pm.test(\"because it was revoked\", () => pm.expect(pm.response.text()).to.match(/revoked/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "204 - signing out twice is fine",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/logout",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refreshToken\": \"{{refreshToken}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 204\", () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 - wrong HTTP method",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{apiUrl}}/logout"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 403\", () => pm.response.to.have.status(403));"
                 ]
               }
             }

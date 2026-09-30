@@ -10,7 +10,8 @@ sequenceDiagram
 
     U->>FE: enters email
     FE->>API: POST /login {email}
-    API->>C: AdminCreateUser + AdminSetUserPassword (new users only → CONFIRMED)
+    API->>C: AdminCreateUser, or AdminGetUser if it exists
+    API->>C: AdminSetUserPassword if new or still FORCE_CHANGE_PASSWORD (→ CONFIRMED)
     API->>API: token = randomBytes(32)
     API->>DB: conditional put {tokenHash: sha256(token), expiresAt, used: false}
     alt previous unused link is younger than the cooldown
@@ -36,3 +37,9 @@ sequenceDiagram
     API-->>FE: 200 JWTs
     FE->>API: GET /me (Authorization: ID token)
     API-->>FE: 200 {sub, email}
+
+    U->>FE: clicks "Sign out"
+    FE->>API: POST /logout {refreshToken}
+    API->>C: RevokeToken
+    API-->>FE: 204 (also for unknown or already revoked tokens)
+    FE->>FE: clear sessionStorage

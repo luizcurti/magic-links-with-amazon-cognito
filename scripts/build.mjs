@@ -8,6 +8,7 @@ const functions = {
   login: "apps/api/src/handlers/login.ts",
   "auth-callback": "apps/api/src/handlers/auth-callback.ts",
   me: "apps/api/src/handlers/me.ts",
+  logout: "apps/api/src/handlers/logout.ts",
   "define-auth-challenge": "apps/cognito/triggers/define-auth-challenge.ts",
   "create-auth-challenge": "apps/cognito/triggers/create-auth-challenge.ts",
   "verify-auth-challenge": "apps/cognito/triggers/verify-auth-challenge.ts",

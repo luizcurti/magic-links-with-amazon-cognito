@@ -9,10 +9,14 @@ services:
       - "127.0.0.1:4510-4559:4510-4559"  # external service ports
     environment:
       LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?Set LOCALSTACK_AUTH_TOKEN in .env (see .env.example)}
-      SERVICES: apigateway,cognito-idp,dynamodb,iam,kms,lambda,logs,ses,sts
+      SERVICES: apigateway,cognito-idp,dynamodb,iam,kms,lambda,logs,ses,sts,wafv2
       AWS_DEFAULT_REGION: us-east-1
       # Lambdas run as sibling containers on this Docker daemon.
       LAMBDA_DOCKER_NETWORK: magic-links
+      # Cap concurrent Lambda containers like an AWS account quota does. Without
+      # it, a burst of requests starts one container each and stalls LocalStack.
+      LAMBDA_LIMITS_CONCURRENT_EXECUTIONS: ${LAMBDA_CONCURRENCY:-20}
+      LAMBDA_LIMITS_MINIMUM_UNRESERVED_CONCURRENCY: ${LAMBDA_CONCURRENCY:-20}
       DEBUG: ${LOCALSTACK_DEBUG:-0}
     volumes:
       - localstack-data:/var/lib/localstack

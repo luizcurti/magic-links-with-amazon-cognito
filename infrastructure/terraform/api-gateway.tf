@@ -94,6 +94,30 @@ resource "aws_api_gateway_integration" "me_get" {
   uri                     = aws_lambda_function.me.invoke_arn
 }
 
+# /logout (public: holding the refresh token is the proof of ownership) -------
+
+resource "aws_api_gateway_resource" "logout" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  parent_id   = aws_api_gateway_rest_api.main.root_resource_id
+  path_part   = "logout"
+}
+
+resource "aws_api_gateway_method" "logout_post" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.logout.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "logout_post" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.logout.id
+  http_method             = aws_api_gateway_method.logout_post.http_method
+  type                    = "AWS_PROXY"
+  integration_http_method = "POST"
+  uri                     = aws_lambda_function.logout.invoke_arn
+}
+
 # Deployment -------------------------------------------------------------------
 
 resource "aws_api_gateway_deployment" "main" {
@@ -109,6 +133,8 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.auth_verify_post.uri,
       aws_api_gateway_integration.me_get.id,
       aws_api_gateway_integration.me_get.uri,
+      aws_api_gateway_integration.logout_post.id,
+      aws_api_gateway_integration.logout_post.uri,
       aws_api_gateway_method.me_get.authorization,
       aws_api_gateway_authorizer.cognito.id,
     ]))
@@ -196,6 +222,7 @@ resource "aws_lambda_permission" "api_gateway" {
     login         = aws_lambda_function.login.function_name
     auth_callback = aws_lambda_function.auth_callback.function_name
     me            = aws_lambda_function.me.function_name
+    logout        = aws_lambda_function.logout.function_name
   }
 
   statement_id  = "AllowApiGatewayInvoke"

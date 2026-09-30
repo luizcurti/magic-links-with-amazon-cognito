@@ -19,6 +19,8 @@
     <text x="270" y="96" fill="#059669">Exchange the link for JWTs (POST /auth/verify)</text>
     <circle cx="586" cy="92" r="8" fill="#7c3aed"/><text x="582" y="96" fill="#fff" font-size="10">C</text>
     <text x="600" y="96" fill="#7c3aed">Call a protected route (GET /me)</text>
+    <circle cx="836" cy="92" r="8" fill="#6b7280"/><text x="832" y="96" fill="#fff" font-size="10">D</text>
+    <text x="850" y="96" fill="#6b7280">Sign out (POST /logout)</text>
   </g>
 
   <!-- AWS / LocalStack boundary -->
@@ -44,6 +46,11 @@
   <text x="302" y="202" font-size="14" font-weight="700" fill="#111827">Magic-link email</text>
   <text x="302" y="222" font-size="12" fill="#4b5563">captured at /_aws/ses</text>
 
+  <!-- WAF in front of API Gateway -->
+  <rect x="290" y="258" width="190" height="34" rx="6" fill="#fef2f2" stroke="#b91c1c" stroke-width="1.5"/>
+  <text x="302" y="272" font-size="10" font-weight="700" fill="#b91c1c">AWS WAF</text>
+  <text x="302" y="286" font-size="11" fill="#4b5563">per-IP rate limits · managed rules</text>
+
   <!-- API Gateway -->
   <rect x="290" y="300" width="190" height="200" rx="8" fill="#fff" stroke="#be185d" stroke-width="1.5"/>
   <rect x="290" y="300" width="190" height="20" rx="8" fill="#be185d"/><rect x="290" y="312" width="190" height="8" fill="#be185d"/>
@@ -53,8 +60,9 @@
   <text x="302" y="382" font-size="12" fill="#4b5563">POST /auth/verify</text>
   <text x="302" y="400" font-size="12" fill="#4b5563">GET /me</text>
   <text x="314" y="418" font-size="12" fill="#4b5563">↳ Cognito authorizer</text>
-  <text x="302" y="448" font-size="11" fill="#6b7280">Stage throttling</text>
-  <text x="302" y="464" font-size="11" fill="#6b7280">JSON access logs · X-Ray</text>
+  <text x="302" y="436" font-size="12" fill="#4b5563">POST /logout</text>
+  <text x="302" y="466" font-size="11" fill="#6b7280">Stage throttling</text>
+  <text x="302" y="482" font-size="11" fill="#6b7280">JSON access logs · X-Ray</text>
 
   <!-- Lambdas -->
   <g>
@@ -75,6 +83,14 @@
     <text x="552" y="555" font-size="10" font-weight="700" fill="#fff">AWS LAMBDA</text>
     <text x="552" y="582" font-size="14" font-weight="700" fill="#111827">λ me</text>
     <text x="552" y="602" font-size="12" fill="#4b5563">returns verified claims</text>
+  </g>
+
+  <g>
+    <rect x="540" y="444" width="190" height="62" rx="8" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="540" y="444" width="190" height="20" rx="8" fill="#d97706"/><rect x="540" y="456" width="190" height="8" fill="#d97706"/>
+    <text x="552" y="459" font-size="10" font-weight="700" fill="#fff">AWS LAMBDA</text>
+    <text x="552" y="484" font-size="14" font-weight="700" fill="#111827">λ logout</text>
+    <text x="552" y="500" font-size="12" fill="#4b5563">revoke refresh token</text>
   </g>
 
   <!-- Cognito -->
@@ -111,7 +127,7 @@
 
   <!-- Observability -->
   <rect x="290" y="640" width="930" height="42" rx="8" fill="#fff" stroke="#6b7280"/>
-  <text x="304" y="666" font-size="12" fill="#374151"><tspan font-weight="700">Amazon CloudWatch Logs</tspan> (explicit log groups, 14-day retention) · <tspan font-weight="700">AWS X-Ray</tspan> tracing · one least-privilege <tspan font-weight="700">IAM</tspan> role per Lambda</text>
+  <text x="304" y="666" font-size="12" fill="#374151"><tspan font-weight="700">Amazon CloudWatch Logs</tspan> (Lambda, API access and WAF logs, 14-day retention) · <tspan font-weight="700">AWS X-Ray</tspan> tracing · one least-privilege <tspan font-weight="700">IAM</tspan> role per Lambda</text>
 
   <!-- A: request a link (blue) -->
   <g fill="none" stroke="#2563eb" stroke-width="2">
@@ -125,7 +141,7 @@
   <g font-size="11" fill="#2563eb" font-weight="600">
     <text x="198" y="369">A1 /login</text>
     <text x="736" y="180">A2 AdminCreateUser</text>
-    <text x="854" y="494" transform="rotate(-90 854 494)">A3 put hash</text>
+    <text x="854" y="468" transform="rotate(-90 854 468)">A3 put hash</text>
     <text x="486" y="184">A4 send</text>
     <text x="214" y="190">A5 email</text>
   </g>
@@ -154,8 +170,19 @@
   </g>
   <g font-size="11" fill="#7c3aed" font-weight="600">
     <text x="198" y="429">C1 /me + JWT</text>
-    <text x="518" y="512">C2 verified</text>
-    <text x="518" y="526">claims only</text>
+    <text x="738" y="572">C2 verified</text>
+    <text x="738" y="586">claims only</text>
+  </g>
+
+  <!-- D: sign out (gray) -->
+  <g fill="none" stroke="#6b7280" stroke-width="2">
+    <path d="M190 448 H288" stroke-dasharray="5 4" marker-end="url(#a-gray)"/>
+    <path d="M480 476 H538" marker-end="url(#a-gray)"/>
+    <path d="M730 490 H1000 V448" marker-end="url(#a-gray)"/>
+  </g>
+  <g font-size="11" fill="#6b7280" font-weight="600">
+    <text x="198" y="462">D1 /logout</text>
+    <text x="872" y="484">D2 RevokeToken</text>
   </g>
 
   <!-- KMS -> DynamoDB -->

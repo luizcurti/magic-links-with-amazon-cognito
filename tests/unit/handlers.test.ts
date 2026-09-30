@@ -1,9 +1,13 @@
 import {
   AdminCreateUserCommand,
+  AdminGetUserCommand,
   CognitoIdentityProviderClient,
   InitiateAuthCommand,
   NotAuthorizedException,
   RespondToAuthChallengeCommand,
+  RevokeTokenCommand,
+  TooManyRequestsException,
+  UnauthorizedException,
   UsernameExistsException,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
@@ -14,6 +18,7 @@ import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
 import { handler as verifyHandler } from "../../apps/api/src/handlers/auth-callback.js";
 import { GENERIC_RESPONSE, handler as loginHandler } from "../../apps/api/src/handlers/login.js";
+import { handler as logoutHandler } from "../../apps/api/src/handlers/logout.js";
 import { handler as meHandler } from "../../apps/api/src/handlers/me.js";
 import { hashToken } from "../../apps/api/src/services/token.service.js";
 
@@ -92,6 +97,7 @@ describe("POST /login", () => {
 
   it("answers exactly the same during the cooldown, without sending another email", async () => {
     cognito.on(AdminCreateUserCommand).rejects(new UsernameExistsException({ message: "exists", $metadata: {} }));
+    cognito.on(AdminGetUserCommand).resolves({ Username: "luiz@example.com", UserStatus: "CONFIRMED" });
     dynamo.on(PutCommand).rejects(new ConditionalCheckFailedException({ message: "recent link", $metadata: {} }));
 
     const response = await invoke(loginHandler, request({ email: "luiz@example.com" }));
@@ -99,6 +105,24 @@ describe("POST /login", () => {
     expect(response.statusCode).toBe(202);
     expect(JSON.parse(response.body)).toEqual(GENERIC_RESPONSE);
     expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
+  });
+
+  it("returns 429 with Retry-After when Cognito keeps throttling", async () => {
+    cognito.on(AdminCreateUserCommand).rejects(new TooManyRequestsException({ message: "slow down", $metadata: {} }));
+
+    const response = await invoke(loginHandler, request({ email: "luiz@example.com" }));
+
+    expect(response.statusCode).toBe(429);
+    expect(response.headers?.["Retry-After"]).toBe("5");
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
+  });
+
+  it("returns 429 when DynamoDB is throttled", async () => {
+    cognito.on(AdminCreateUserCommand).resolves({});
+    const throttled = Object.assign(new Error("rate exceeded"), { name: "ProvisionedThroughputExceededException" });
+    dynamo.on(PutCommand).rejects(throttled);
+
+    expect((await invoke(loginHandler, request({ email: "luiz@example.com" }))).statusCode).toBe(429);
   });
 
   it("accepts a base64-encoded body", async () => {
@@ -162,6 +186,15 @@ describe("POST /auth/verify", () => {
     expect(cognito.commandCalls(InitiateAuthCommand)).toHaveLength(0);
   });
 
+  it("returns 429 when Cognito throttles, before the link is consumed", async () => {
+    cognito.on(InitiateAuthCommand).rejects(new TooManyRequestsException({ message: "slow down", $metadata: {} }));
+
+    const response = await invoke(verifyHandler, request({ email: "luiz@example.com", token: TOKEN }));
+
+    expect(response.statusCode).toBe(429);
+    expect(cognito.commandCalls(RespondToAuthChallengeCommand)).toHaveLength(0);
+  });
+
   it("returns 500 without leaking internals when a Cognito trigger fails", async () => {
     cognito.on(InitiateAuthCommand).resolves({ ChallengeName: "CUSTOM_CHALLENGE", Session: "s" });
     cognito
@@ -172,6 +205,50 @@ describe("POST /auth/verify", () => {
 
     expect(response.statusCode).toBe(500);
     expect(response.body).not.toContain("DynamoDB");
+  });
+});
+
+describe("POST /logout", () => {
+  it("revokes the refresh token and answers 204 with no body", async () => {
+    cognito.on(RevokeTokenCommand).resolves({});
+
+    const response = await invoke(logoutHandler, request({ refreshToken: "refresh" }));
+
+    expect(response.statusCode).toBe(204);
+    expect(response.body).toBe("");
+    expect(cognito.commandCalls(RevokeTokenCommand)[0]?.args[0].input).toEqual({
+      ClientId: "client-id",
+      Token: "refresh",
+    });
+  });
+
+  it("is idempotent for tokens Cognito does not recognise", async () => {
+    cognito.on(RevokeTokenCommand).rejects(new UnauthorizedException({ message: "invalid", $metadata: {} }));
+    expect((await invoke(logoutHandler, request({ refreshToken: "garbage" }))).statusCode).toBe(204);
+  });
+
+  it.each([
+    ["missing token", {}],
+    ["empty token", { refreshToken: "" }],
+    ["oversized token", { refreshToken: "x".repeat(8193) }],
+    ["token that is not a string", { refreshToken: 42 }],
+  ])("returns 400 for a %s without calling Cognito", async (_label, body) => {
+    expect((await invoke(logoutHandler, request(body))).statusCode).toBe(400);
+    expect(cognito.commandCalls(RevokeTokenCommand)).toHaveLength(0);
+  });
+
+  it("returns 429 when Cognito throttles", async () => {
+    cognito.on(RevokeTokenCommand).rejects(new TooManyRequestsException({ message: "slow down", $metadata: {} }));
+    const response = await invoke(logoutHandler, request({ refreshToken: "refresh" }));
+    expect(response.statusCode).toBe(429);
+    expect(response.headers?.["Retry-After"]).toBe("5");
+  });
+
+  it("returns 500 without leaking internals on other failures", async () => {
+    cognito.on(RevokeTokenCommand).rejects(new Error("UnsupportedOperationException: revocation disabled"));
+    const response = await invoke(logoutHandler, request({ refreshToken: "refresh" }));
+    expect(response.statusCode).toBe(500);
+    expect(response.body).not.toContain("revocation");
   });
 });
 

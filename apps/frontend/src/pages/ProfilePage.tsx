@@ -17,6 +17,7 @@ export function ProfilePage() {
   const [tokens] = useState(session.load);
   const [profile, setProfile] = useState<Profile>();
   const [error, setError] = useState<string>();
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     if (!tokens) {
@@ -38,7 +39,10 @@ export function ProfilePage() {
 
   if (!tokens) return null;
 
-  function signOut() {
+  async function signOut() {
+    setSigningOut(true);
+    // Revoke server-side first; the local session is dropped even if that fails.
+    if (tokens?.refreshToken) await api.logout(tokens.refreshToken).catch(() => undefined);
     session.clear();
     navigate("/");
   }
@@ -62,8 +66,8 @@ export function ProfilePage() {
       <h2>ID token claims</h2>
       <pre>{JSON.stringify(claims, null, 2)}</pre>
 
-      <button type="button" className="secondary" onClick={signOut}>
-        Sign out
+      <button type="button" className="secondary" onClick={signOut} disabled={signingOut}>
+        {signingOut ? "Signing out…" : "Sign out"}
       </button>
     </>
   );

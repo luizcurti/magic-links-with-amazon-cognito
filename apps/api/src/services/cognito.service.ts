@@ -1,11 +1,15 @@
 import { randomBytes } from "node:crypto";
 import {
   AdminCreateUserCommand,
+  AdminGetUserCommand,
   AdminSetUserPasswordCommand,
   type CognitoIdentityProviderClient,
   InitiateAuthCommand,
   NotAuthorizedException,
   RespondToAuthChallengeCommand,
+  RevokeTokenCommand,
+  UnauthorizedException,
+  UnsupportedTokenTypeException,
   UserNotFoundException,
   UsernameExistsException,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -43,21 +47,13 @@ export class CognitoService {
    * not let such users sign in until they set a password. Setting a random
    * permanent one moves the user to CONFIRMED. Nobody ever knows it, and the
    * app client only allows CUSTOM_AUTH, so it can never be used to sign in.
+   *
+   * If a previous request created the user but failed before confirming it,
+   * the next request finds it still in FORCE_CHANGE_PASSWORD and repairs it.
    */
   async ensureUser(email: string): Promise<void> {
-    try {
-      await this.client.send(
-        new AdminCreateUserCommand({
-          UserPoolId: this.userPoolId,
-          Username: email,
-          MessageAction: "SUPPRESS",
-          UserAttributes: [{ Name: "email", Value: email }],
-        }),
-      );
-    } catch (error) {
-      if (error instanceof UsernameExistsException) return;
-      throw error;
-    }
+    const created = await this.createUser(email);
+    if (!created && (await this.userStatus(email)) !== "FORCE_CHANGE_PASSWORD") return;
 
     await this.client.send(
       new AdminSetUserPasswordCommand({
@@ -67,6 +63,49 @@ export class CognitoService {
         Permanent: true,
       }),
     );
+  }
+
+  /** @returns false when the user already existed. */
+  private async createUser(email: string): Promise<boolean> {
+    try {
+      await this.client.send(
+        new AdminCreateUserCommand({
+          UserPoolId: this.userPoolId,
+          Username: email,
+          MessageAction: "SUPPRESS",
+          UserAttributes: [{ Name: "email", Value: email }],
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof UsernameExistsException) return false;
+      throw error;
+    }
+  }
+
+  private async userStatus(email: string): Promise<string | undefined> {
+    const user = await this.client.send(new AdminGetUserCommand({ UserPoolId: this.userPoolId, Username: email }));
+    return user.UserStatus;
+  }
+
+  /**
+   * Revokes a refresh token, and with it the access tokens issued from it.
+   * Idempotent: a token Cognito does not recognise is already unusable, so
+   * signing out with it succeeds too.
+   *
+   * ID tokens are verified by API Gateway without asking Cognito, so they stay
+   * valid until they expire (60 minutes).
+   *
+   * @returns false when Cognito did not recognise the token.
+   */
+  async revokeRefreshToken(refreshToken: string): Promise<boolean> {
+    try {
+      await this.client.send(new RevokeTokenCommand({ ClientId: this.clientId, Token: refreshToken }));
+      return true;
+    } catch (error) {
+      if (error instanceof UnauthorizedException || error instanceof UnsupportedTokenTypeException) return false;
+      throw error;
+    }
   }
 
   /**

@@ -15,6 +15,7 @@ locals {
     "login",
     "auth-callback",
     "me",
+    "logout",
     "define-auth-challenge",
     "create-auth-challenge",
     "verify-auth-challenge",
@@ -61,7 +62,7 @@ data "aws_iam_policy_document" "login" {
   source_policy_documents = [data.aws_iam_policy_document.table_kms.json]
 
   statement {
-    actions   = ["cognito-idp:AdminCreateUser", "cognito-idp:AdminSetUserPassword"]
+    actions   = ["cognito-idp:AdminCreateUser", "cognito-idp:AdminGetUser", "cognito-idp:AdminSetUserPassword"]
     resources = [aws_cognito_user_pool.main.arn]
   }
 
@@ -98,6 +99,6 @@ resource "aws_iam_role_policy" "verify_auth_challenge" {
   policy = data.aws_iam_policy_document.verify_auth_challenge.json
 }
 
-# auth-callback only calls InitiateAuth / RespondToAuthChallenge, which are
-# public (unauthenticated) Cognito APIs, so it needs no extra permissions.
+# auth-callback (InitiateAuth / RespondToAuthChallenge) and logout (RevokeToken)
+# only call public, unauthenticated Cognito APIs, so they need no extra permissions.
 # define/create-auth-challenge and me are pure functions: logs only.

@@ -1,4 +1,4 @@
-type Level = "info" | "error";
+type Level = "info" | "warn" | "error";
 
 /**
  * Minimal structured (JSON) logger. Never pass raw tokens or JWTs here —
@@ -7,11 +7,13 @@ type Level = "info" | "error";
 function log(level: Level, message: string, context: Record<string, unknown> = {}): void {
   const entry = JSON.stringify({ level, message, ...context, timestamp: new Date().toISOString() });
   if (level === "error") console.error(entry);
+  else if (level === "warn") console.warn(entry);
   else console.log(entry);
 }
 
 export const logger = {
   info: (message: string, context?: Record<string, unknown>) => log("info", message, context),
+  warn: (message: string, context?: Record<string, unknown>) => log("warn", message, context),
   error: (message: string, context?: Record<string, unknown>) => log("error", message, context),
 };
 

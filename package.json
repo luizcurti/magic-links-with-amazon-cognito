@@ -20,7 +20,7 @@
     "test": "vitest run tests/unit apps/frontend",
     "test:unit": "vitest run tests/unit apps/frontend",
     "test:integration": "vitest run tests/integration",
-    "test:api": "npx --yes newman@6.2.2 run api/magic-links.postman_collection.json --bail --delay-request 300 --env-var apiUrl=$(terraform -chdir=infrastructure/terraform output -raw api_url)",
+    "test:api": "npx --yes newman@6.2.2 run api/magic-links.postman_collection.json --bail --delay-request 300 --env-var apiUrl=$(terraform -chdir=infrastructure/terraform output -raw api_url) --env-var clientId=$(terraform -chdir=infrastructure/terraform output -raw user_pool_client_id)",
     "test:coverage": "vitest run tests/unit apps/frontend --coverage",
     "dev:frontend": "npm run dev -w apps/frontend",
     "test:e2e": "playwright test"

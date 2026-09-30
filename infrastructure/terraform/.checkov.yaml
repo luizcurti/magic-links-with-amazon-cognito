@@ -13,7 +13,7 @@ skip-check:
   - CKV_AWS_173 # Env var CMK: environment variables hold only resource names/URLs, never secrets.
   - CKV_AWS_272 # Code signing: needs AWS Signer profiles; out of scope for a LocalStack deployment.
   # API Gateway
-  - CKV2_AWS_29 # WAF: not emulated by LocalStack; stage throttling covers basic abuse. Add WAF for production.
+  - CKV2_AWS_77 # Log4j check also demands AnonymousIpList, which would block legitimate users on VPNs; KnownBadInputs (the Log4j rules) is enabled.
   - CKV2_AWS_51 # Client certificates: the API is called by browsers, not by backends that could hold mTLS certs.
   - CKV_AWS_59 # Open access: /login and /auth/verify are public by design (they are how users authenticate).
   - CKV2_AWS_53 # Request validators: request bodies are validated with Zod in the Lambdas (single source of truth).

@@ -1,5 +1,21 @@
+import { CognitoIdentityProviderClient, InitiateAuthCommand } from "@aws-sdk/client-cognito-identity-provider";
 import { expect, type Page, test } from "@playwright/test";
-import { uniqueEmail, waitForMagicLink } from "../integration/stack.js";
+import { LOCALSTACK_ENDPOINT, loadStack, uniqueEmail, waitForMagicLink } from "../integration/stack.js";
+
+const cognito = new CognitoIdentityProviderClient({
+  endpoint: LOCALSTACK_ENDPOINT,
+  region: "us-east-1",
+  credentials: { accessKeyId: "test", secretAccessKey: "test" },
+});
+
+const refresh = (refreshToken: string) =>
+  cognito.send(
+    new InitiateAuthCommand({
+      AuthFlow: "REFRESH_TOKEN_AUTH",
+      ClientId: loadStack()?.clientId,
+      AuthParameters: { REFRESH_TOKEN: refreshToken },
+    }),
+  );
 
 /** Types the email on the login page and returns the magic link it produced. */
 async function requestLinkInBrowser(page: Page, email: string): Promise<URL> {
@@ -27,8 +43,19 @@ test.describe("happy path", () => {
     await expect(page.locator("pre")).toContainText(`"email": "${email}"`);
     expect(page.url()).toBe("http://localhost:5173/profile");
 
+    const refreshToken = await page.evaluate(
+      () => JSON.parse(sessionStorage.getItem("magic-links.session") ?? "{}").refreshToken as string,
+    );
+    await expect(refresh(refreshToken)).resolves.toHaveProperty("AuthenticationResult.AccessToken");
+
+    const logout = page.waitForResponse((response) => response.url().endsWith("/api/logout"));
     await page.getByRole("button", { name: "Sign out" }).click();
+    expect((await logout).status()).toBe(204);
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+
+    // The session is gone from the browser and the refresh token is dead server-side.
+    expect(await page.evaluate(() => sessionStorage.getItem("magic-links.session"))).toBeNull();
+    await expect(refresh(refreshToken)).rejects.toThrow(/revoked/i);
 
     await page.goto("/profile");
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();

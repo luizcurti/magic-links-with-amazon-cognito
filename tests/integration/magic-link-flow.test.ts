@@ -4,7 +4,12 @@
  *
  * Prerequisites: make up && make infra
  */
-import { AdminGetUserCommand, CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
+import {
+  AdminCreateUserCommand,
+  AdminGetUserCommand,
+  CognitoIdentityProviderClient,
+  InitiateAuthCommand,
+} from "@aws-sdk/client-cognito-identity-provider";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { describe, expect, it } from "vitest";
@@ -62,6 +67,24 @@ async function ageLink(email: string, attribute: "createdAt" | "expiresAt", seco
 
 const verify = (email: string, token: string) => post(`${apiUrl}/auth/verify`, { email, token });
 
+/** Signs in end to end and returns the Cognito tokens. */
+async function signIn(label: string) {
+  const email = uniqueEmail(label);
+  const { token } = await requestLink(email);
+  const { body } = await verify(email, token);
+  return body;
+}
+
+/** Tries to mint new tokens from a refresh token, as a client would. */
+const refresh = (refreshToken: string) =>
+  cognito.send(
+    new InitiateAuthCommand({
+      AuthFlow: "REFRESH_TOKEN_AUTH",
+      ClientId: stack?.clientId,
+      AuthParameters: { REFRESH_TOKEN: refreshToken },
+    }),
+  );
+
 describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () => {
   describe("happy path", () => {
     it("login -> email -> JWT -> /me", async () => {
@@ -113,6 +136,43 @@ describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () =>
           )
         ).status,
       ).toBe(200);
+    });
+
+    it("repairs a user an earlier failed request left in FORCE_CHANGE_PASSWORD", async () => {
+      const email = uniqueEmail("stuck");
+      await cognito.send(
+        new AdminCreateUserCommand({
+          UserPoolId: stack?.userPoolId,
+          Username: email,
+          MessageAction: "SUPPRESS",
+          UserAttributes: [{ Name: "email", Value: email }],
+        }),
+      );
+
+      const { token } = await requestLink(email);
+
+      const user = await cognito.send(new AdminGetUserCommand({ UserPoolId: stack?.userPoolId, Username: email }));
+      expect(user.UserStatus).toBe("CONFIRMED");
+      expect((await verify(email, token)).status).toBe(200);
+    });
+
+    it("sign-out revokes the refresh token and is idempotent", async () => {
+      const { refreshToken = "" } = await signIn("logout");
+      await expect(refresh(refreshToken)).resolves.toHaveProperty("AuthenticationResult.AccessToken");
+
+      const first = await post(`${apiUrl}/logout`, { refreshToken });
+      const second = await post(`${apiUrl}/logout`, { refreshToken });
+
+      expect([first.status, second.status]).toEqual([204, 204]);
+      await expect(refresh(refreshToken)).rejects.toThrow(/revoked/i);
+    });
+
+    it("known limit: the ID token keeps working on /me until it expires, even after sign-out", async () => {
+      const { idToken = "", refreshToken = "" } = await signIn("stateless");
+      await post(`${apiUrl}/logout`, { refreshToken });
+
+      // API Gateway checks the JWT signature and expiry, not Cognito revocation.
+      expect((await fetch(`${apiUrl}/me`, { headers: { Authorization: idToken } })).status).toBe(200);
     });
 
     it("lets a returning user sign in again with a new link", async () => {
@@ -239,8 +299,26 @@ describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () =>
       expect((await fetch(`${apiUrl}/me`, { headers: { Authorization: body.accessToken ?? "" } })).status).toBe(401);
     });
 
+    it.each([
+      ["missing token", {}],
+      ["empty token", { refreshToken: "" }],
+      ["token that is not a string", { refreshToken: 42 }],
+    ])("rejects a sign-out with a %s with 400", async (_label, body) => {
+      expect((await post(`${apiUrl}/logout`, body)).status).toBe(400);
+    });
+
+    it("a burst of parallel logins is absorbed without taking the stack down", { timeout: 120_000 }, async () => {
+      const responses = await Promise.all(
+        Array.from({ length: 30 }, (_, i) => post(`${apiUrl}/login`, { email: uniqueEmail(`burst${i}`) })),
+      );
+
+      expect(responses.map((r) => r.status).every((s) => s === 202)).toBe(true);
+      expect(await isLocalStackUp()).toBe(true);
+    });
+
     it("unknown routes and methods are not exposed", async () => {
       expect((await fetch(`${apiUrl}/login`)).status).toBe(403);
+      expect((await fetch(`${apiUrl}/logout`)).status).toBe(403);
       expect((await post(`${apiUrl}/admin`, {})).status).toBe(403);
     });
   });
