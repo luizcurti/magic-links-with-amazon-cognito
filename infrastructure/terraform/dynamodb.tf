@@ -8,10 +8,12 @@ resource "aws_dynamodb_table" "magic_links" {
     type = "S"
   }
 
-  # Expired links are purged automatically. TTL deletion is lazy, so the
-  # application still checks expiresAt on every verification.
+  # Items are purged automatically a day after they were written: long enough
+  # to keep the growing cooldown's streak, which must outlive the 10-minute
+  # link. TTL deletion is lazy anyway, so expiry is always checked against
+  # expiresAt.
   ttl {
-    attribute_name = "expiresAt"
+    attribute_name = "purgeAt"
     enabled        = true
   }
 

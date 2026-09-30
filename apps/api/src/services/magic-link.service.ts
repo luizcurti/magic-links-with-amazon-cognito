@@ -14,18 +14,78 @@ export type VerificationResult =
 export interface MagicLinkServiceOptions {
   repository: MagicLinkRepository;
   emailSender?: EmailSender;
-  /** Frontend route that receives `?email=...&token=...`. */
+  /** Frontend route that receives `#email=...&token=...`. */
   callbackUrl?: string;
   ttlSeconds?: number;
-  /** Minimum time between two links for the same email, against email bombing. */
+  /** Minimum time between two links for the same email, against email bombing. Doubles with each unused link. */
   cooldownSeconds?: number;
+  /** Ceiling of the growing cooldown. */
+  maxCooldownSeconds?: number;
   now?: () => Date;
 }
 
-export type IssueResult = { status: "SENT"; expiresAt: number } | { status: "COOLDOWN" };
+/** Where a request for a link came from, when it went through the queue. */
+export interface IssueOptions {
+  /** Epoch seconds: when the user asked. A link created after that is never replaced. */
+  requestedAt?: number;
+  /** ID of the queued request (SQS message), so a retry of it may replace its own undelivered link. */
+  requestId?: string;
+}
+
+export type IssueResult =
+  | { status: "SENT"; expiresAt: number }
+  /** Too soon after the previous unused link, or another request won the race. */
+  | { status: "COOLDOWN" }
+  /** A link newer than this request already exists. */
+  | { status: "SUPERSEDED" };
 
 export const DEFAULT_TTL_SECONDS = 10 * 60;
 export const DEFAULT_COOLDOWN_SECONDS = 60;
+export const DEFAULT_MAX_COOLDOWN_SECONDS = 15 * 60;
+/** After this long without a new link, an unused streak is forgotten. */
+export const STREAK_RESET_SECONDS = 60 * 60;
+/** How long an item (and its streak) is kept after it was written. */
+export const PURGE_AFTER_SECONDS = 24 * 60 * 60;
+
+export interface CooldownPolicy {
+  cooldownSeconds: number;
+  maxCooldownSeconds: number;
+}
+
+export type IssueDecision =
+  | { allowed: true; streak: number; replacingOwnUndelivered: boolean }
+  | { allowed: false; status: "COOLDOWN" | "SUPERSEDED" };
+
+/**
+ * Whether a new link may be issued, given the current item. Pure, so every
+ * rule is unit-testable. The cooldown grows with each link issued in a row
+ * without one being used (60 s, 120 s, 240 s … up to the ceiling): someone
+ * flooding another person's address gets a handful of emails an hour
+ * through, not sixty. Using a link, or an hour without requests, resets it.
+ */
+export function decideIssue(
+  previous: MagicLinkRecord | undefined,
+  nowEpochSeconds: number,
+  { requestedAt, requestId }: IssueOptions,
+  { cooldownSeconds, maxCooldownSeconds }: CooldownPolicy,
+): IssueDecision {
+  if (!previous) return { allowed: true, streak: 0, replacingOwnUndelivered: false };
+  const streak = previous.streak ?? 0;
+
+  // A retry of the request that wrote this link, whose email never went out
+  // (SES and the rollback both failed): it must be able to try again.
+  if (requestId !== undefined && previous.requestId === requestId && previous.deliveredAt === undefined) {
+    return { allowed: true, streak, replacingOwnUndelivered: true };
+  }
+  // A request that reaches the worker late must not replace a newer link.
+  if (requestedAt !== undefined && previous.createdAt > requestedAt) return { allowed: false, status: "SUPERSEDED" };
+  if (previous.used) return { allowed: true, streak: 0, replacingOwnUndelivered: false };
+
+  const idle = nowEpochSeconds - previous.createdAt;
+  if (idle >= STREAK_RESET_SECONDS) return { allowed: true, streak: 0, replacingOwnUndelivered: false };
+  if (idle < Math.min(cooldownSeconds * 2 ** streak, maxCooldownSeconds)) return { allowed: false, status: "COOLDOWN" };
+  return { allowed: true, streak: streak + 1, replacingOwnUndelivered: false };
+}
 
 const toEpochSeconds = (date: Date): number => Math.floor(date.getTime() / 1000);
 
@@ -41,6 +101,8 @@ export function evaluateMagicLink(
   nowEpochSeconds: number,
 ): VerificationResult {
   if (!record) return "NOT_FOUND";
+  // Cannot happen while the key is derived from the email; kept as defence in
+  // depth, so a token is never checked against another address's item.
   if (record.email !== email) return "EMAIL_MISMATCH";
   if (!hashesMatch(record.tokenHash, tokenHash)) return "TOKEN_MISMATCH";
   if (record.used) return "ALREADY_USED";
@@ -53,7 +115,7 @@ export class MagicLinkService {
   private readonly emailSender: EmailSender | undefined;
   private readonly callbackUrl: string | undefined;
   private readonly ttlSeconds: number;
-  private readonly cooldownSeconds: number;
+  private readonly cooldown: CooldownPolicy;
   private readonly now: () => Date;
 
   constructor(options: MagicLinkServiceOptions) {
@@ -61,7 +123,10 @@ export class MagicLinkService {
     this.emailSender = options.emailSender;
     this.callbackUrl = options.callbackUrl;
     this.ttlSeconds = options.ttlSeconds ?? DEFAULT_TTL_SECONDS;
-    this.cooldownSeconds = options.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS;
+    this.cooldown = {
+      cooldownSeconds: options.cooldownSeconds ?? DEFAULT_COOLDOWN_SECONDS,
+      maxCooldownSeconds: options.maxCooldownSeconds ?? DEFAULT_MAX_COOLDOWN_SECONDS,
+    };
     this.now = options.now ?? (() => new Date());
   }
 
@@ -69,25 +134,38 @@ export class MagicLinkService {
    * Issues a new single-use link. The plaintext token exists only in memory
    * and in the email; the database only ever sees its hash.
    *
-   * Within the cooldown window nothing is stored or sent, so a flood of
-   * requests for someone else's address produces at most one email. Nor is
-   * anything sent when a link newer than `requestedAt` (epoch seconds, when
-   * the user asked) already exists: a late request must not replace it.
+   * Nothing is stored or sent within the cooldown (see decideIssue), or when a
+   * link newer than the request already exists. The decision is written with
+   * optimistic concurrency, so parallel requests issue at most one link.
    */
-  async requestMagicLink(email: string, requestedAt?: number): Promise<IssueResult> {
+  async requestMagicLink(email: string, options: IssueOptions = {}): Promise<IssueResult> {
     if (!this.emailSender || !this.callbackUrl) {
       throw new Error("MagicLinkService needs an emailSender and callbackUrl to issue links");
     }
 
+    const createdAt = toEpochSeconds(this.now());
+    const previous = await this.repository.findByEmail(email);
+    const decision = decideIssue(previous, createdAt, options, this.cooldown);
+    if (!decision.allowed) return { status: decision.status };
+
     const token = generateToken();
     const tokenHash = hashToken(token);
-    const createdAt = toEpochSeconds(this.now());
     const expiresAt = createdAt + this.ttlSeconds;
-
     const saved = await this.repository.save(
-      { email, tokenHash, createdAt, expiresAt },
-      createdAt - this.cooldownSeconds,
-      requestedAt,
+      {
+        email,
+        tokenHash,
+        createdAt,
+        expiresAt,
+        streak: decision.streak,
+        requestId: options.requestId,
+        purgeAt: createdAt + Math.max(PURGE_AFTER_SECONDS, this.ttlSeconds),
+      },
+      previous && {
+        tokenHash: previous.tokenHash,
+        used: previous.used,
+        undelivered: decision.replacingOwnUndelivered,
+      },
     );
     if (!saved) return { status: "COOLDOWN" };
 
@@ -98,12 +176,17 @@ export class MagicLinkService {
         expiresInMinutes: Math.round(this.ttlSeconds / 60),
       });
     } catch (error) {
-      // Nobody received this link: drop it, or the cooldown would turn the
-      // retry into a silent no-op and the user would get no email at all.
-      await this.repository.deleteUndelivered(email, tokenHash);
+      // Nobody received this link: drop it, so another request is not held back
+      // by the cooldown. If even that fails, the retry of this same request
+      // replaces the link itself (decideIssue), so the user still gets an email.
+      await this.repository.deleteUndelivered(email, tokenHash).catch(() => undefined);
       throw error;
     }
 
+    // Lets a retry of this request (the worker died after sending) see that
+    // the email went out, instead of sending a second one. Best effort: if it
+    // fails, such a retry just sends a fresh link.
+    await this.repository.markDelivered(email, tokenHash, createdAt).catch(() => undefined);
     return { status: "SENT", expiresAt };
   }
 

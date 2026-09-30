@@ -19,7 +19,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
       sub: claims.sub,
       email: claims.email,
       emailVerified: claims.email_verified === true || claims.email_verified === "true",
-      authTime: claims.auth_time,
+      authTime: Number(claims.auth_time),
       expiresAt: claims.exp,
     });
   } catch (error) {

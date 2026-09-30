@@ -60,13 +60,15 @@ make down                            # stop LocalStack, delete its data and the 
 | `MAGIC_LINK_CALLBACK_URL` | send-magic-link | Frontend route the link points to |
 | `MAGIC_LINK_TTL_SECONDS` | send-magic-link | Link lifetime (default `600`) |
 | `MAGIC_LINK_COOLDOWN_SECONDS` | send-magic-link | Minimum time between two links for one email (default `60`) |
-| `CORS_ALLOWED_ORIGIN` | API Lambdas | Allowed origin |
+| `MAGIC_LINK_MAX_COOLDOWN_SECONDS` | send-magic-link | Ceiling of the growing cooldown (default `900`) |
+| `ID_TOKEN_ISSUER` | me | Issuer of the pool's ID tokens; the JWKS is fetched from `<issuer>/.well-known/jwks.json` |
+| `CORS_ALLOWED_ORIGIN` | API Lambdas | Allowed origin (`frontend_origin`) |
 
 Missing required variables fail the request with a `500` and a clear log line, instead of reaching AWS with `undefined`. There are no secrets: tokens are generated per request and only their hash is stored.
 
-**Frontend:** `make infra` writes `VITE_API_PROXY_TARGET` (the API Gateway URL) to `apps/frontend/.env.local`; the Vite dev server proxies `/api` to it.
+**Frontend:** `make infra` writes `VITE_API_PROXY_TARGET` (the API Gateway URL) to `apps/frontend/.env.local`; the Vite dev server proxies `/api` to it, so locally everything is same-origin. A build served from another origin sets `VITE_API_BASE_URL` to the API Gateway URL instead, and `frontend_origin` to that origin: the API answers its CORS preflights, and API Gateway's and the WAF's own errors carry the matching header.
 
-**Terraform variables** ([`variables.tf`](../infrastructure/terraform/variables.tf)) cover names, URLs, the token lifetime (`token_validity_minutes`, default 15), the link TTL and cooldown (`magic_link_cooldown_seconds`, default 60), log retention (`log_retention_days`, default 14), API throttling per route (`api_throttle_rate_limit` / `api_throttle_burst_limit`, default 100 rps / 200 burst; `POST /login` has its own `login_throttle_rate_limit` / `login_throttle_burst_limit`, 20 / 40, so a flood of link requests cannot block sign-in for users who already hold a link or a session), the worker's concurrency (`send_magic_link_max_concurrency`, default 5) and the WAF (`waf_login_rate_limit` 10 and `waf_api_rate_limit` 300 requests per IP per `waf_rate_window_seconds` 300).
+**Terraform variables** ([`variables.tf`](../infrastructure/terraform/variables.tf)) cover names, URLs, the token lifetime (`token_validity_minutes`, default 15), the link TTL and cooldown (`magic_link_cooldown_seconds`, default 60, doubling up to `magic_link_max_cooldown_seconds`, default 900), log retention (`log_retention_days`, default 14), API throttling per route (`api_throttle_rate_limit` / `api_throttle_burst_limit`, default 100 rps / 200 burst; `POST /login` has its own `login_throttle_rate_limit` / `login_throttle_burst_limit`, 20 / 40, so a flood of link requests cannot block sign-in for users who already hold a link or a session), the worker's concurrency (`send_magic_link_max_concurrency`, default 5) and the WAF (`waf_login_rate_limit` 10 and `waf_api_rate_limit` 300 requests per IP per `waf_rate_window_seconds` 300).
 
 ## Terraform
 
@@ -97,5 +99,5 @@ For production, on top of that:
 
 1. Bootstrap remote state once: an S3 bucket with versioning and encryption, then add a `backend "s3"` block with `use_lockfile = true` (Terraform ≥ 1.10), or a DynamoDB lock table for older versions.
 2. Set `ses_from_address` to an address or domain you own, verify it (DKIM/SPF/DMARC), and move SES out of the sandbox.
-3. Point `magic_link_callback_url` / `frontend_origin` at your deployed frontend, and serve it with the same security headers as the Vite server (`frame-ancestors 'none'`, `X-Frame-Options: DENY`).
+3. Point `magic_link_callback_url` / `frontend_origin` at your deployed frontend (and build it with `VITE_API_BASE_URL` if it is not served from the API's origin), and serve it with the same security headers as the Vite server (`frame-ancestors 'none'`, `X-Frame-Options: DENY`).
 4. Revisit the production items skipped in [`.checkov.yaml`](../infrastructure/terraform/.checkov.yaml) and the ones this local project leaves out: CloudWatch alarms with a notification target (5xx, WAF blocks, dead-letter queue depth, SES bounces), longer log retention, Lambda aliases for gradual rollout, refresh-token rotation.

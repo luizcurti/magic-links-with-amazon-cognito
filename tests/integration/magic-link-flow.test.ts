@@ -4,6 +4,8 @@
  *
  * Prerequisites: make up && make infra
  */
+
+import { APIGatewayClient, GetGatewayResponseCommand } from "@aws-sdk/client-api-gateway";
 import {
   AdminCreateUserCommand,
   AdminGetUserCommand,
@@ -44,6 +46,7 @@ const awsConfig = {
 const dynamo = DynamoDBDocumentClient.from(new DynamoDBClient(awsConfig));
 const cognito = new CognitoIdentityProviderClient(awsConfig);
 const sqs = new SQSClient(awsConfig);
+const apiGateway = new APIGatewayClient(awsConfig);
 
 const apiUrl = stack?.apiUrl ?? "";
 /**
@@ -340,6 +343,25 @@ describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () =>
       expect((await verify(email, token)).status).toBe(200);
     });
 
+    it("the cooldown grows with each unused link (60 s, then 120 s)", async () => {
+      const email = uniqueEmail("backoff");
+      await requestLink(email); // streak 0
+      await ageLink(email, "createdAt", 61);
+      await requestLink(email); // waited past 60 s → streak 1
+
+      await ageLink(email, "createdAt", 61); // 61 s: enough before, not any more
+      await post(`${apiUrl}/login`, { email });
+      await waitForQueueDrained(stack?.loginQueueUrl ?? "");
+      expect(await countEmails(email)).toBe(2);
+
+      const { Item } = await dynamo.send(
+        new GetCommand({ TableName: stack?.tableName, Key: { pk: `EMAIL#${email}` } }),
+      );
+      expect(Item?.streak).toBe(1);
+      expect(Item?.deliveredAt).toBeTypeOf("number");
+      expect(Item?.purgeAt).toBeGreaterThan(Item?.expiresAt);
+    });
+
     it("email bombing: repeated requests inside the cooldown send a single email", async () => {
       const email = uniqueEmail("bomb");
       const { token } = await requestLink(email);
@@ -476,6 +498,38 @@ describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () =>
 
       expect(responses.map((r) => r.status).every((s) => s === 202)).toBe(true);
       expect(await isLocalStackUp()).toBe(true);
+    });
+
+    it.each(["/login", "/auth/verify", "/auth/refresh", "/me", "/logout"])(
+      "answers the CORS preflight of %s for the frontend origin",
+      async (path) => {
+        const response = await fetch(`${apiUrl}${path}`, {
+          method: "OPTIONS",
+          headers: {
+            Origin: "http://localhost:5173",
+            "Access-Control-Request-Method": path === "/me" ? "GET" : "POST",
+            "Access-Control-Request-Headers": "content-type,authorization",
+          },
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+        expect(response.headers.get("access-control-allow-methods")).toContain(path === "/me" ? "GET" : "POST");
+        expect(response.headers.get("access-control-allow-headers")).toContain("Authorization");
+      },
+    );
+
+    // API Gateway's own 4xx/5xx (authorizer 401, unknown route 403, throttling
+    // 429) must carry CORS headers too. LocalStack stores gateway responses but
+    // does not apply them, so the configuration is checked here and the real
+    // behaviour by `make test-aws`.
+    it.each(["DEFAULT_4XX", "DEFAULT_5XX"] as const)("%s gateway responses carry CORS headers", async (type) => {
+      const response = await apiGateway.send(
+        new GetGatewayResponseCommand({ restApiId: stack?.apiId, responseType: type }),
+      );
+      expect(response.responseParameters?.["gatewayresponse.header.Access-Control-Allow-Origin"]).toBe(
+        "'http://localhost:5173'",
+      );
     });
 
     it("unknown routes and methods are not exposed", async () => {

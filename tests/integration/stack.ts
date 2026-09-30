@@ -7,6 +7,7 @@ export interface StackOutputs {
   userPoolId: string;
   clientId: string;
   loginQueueUrl: string;
+  apiId: string;
 }
 
 export const LOCALSTACK_ENDPOINT = process.env.LOCALSTACK_ENDPOINT ?? "http://localhost:4566";
@@ -25,6 +26,7 @@ export function loadStack(): StackOutputs | undefined {
       userPoolId: outputs.user_pool_id!.value,
       clientId: outputs.user_pool_client_id!.value,
       loginQueueUrl: outputs.login_queue_url!.value,
+      apiId: outputs.api_id!.value,
     };
   } catch {
     return undefined;

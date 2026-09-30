@@ -14,52 +14,70 @@ describe("MagicLinkRepository", () => {
     expect(emailKey("luiz@example.com")).toBe("EMAIL#luiz@example.com");
   });
 
-  it("saves a new unused link unless a recent unused one exists", async () => {
-    dynamo.on(PutCommand).resolves({});
-    await expect(
-      repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40),
-    ).resolves.toBe(true);
+  const link = {
+    email: "luiz@example.com",
+    tokenHash: "h",
+    createdAt: 100,
+    expiresAt: 700,
+    streak: 2,
+    requestId: "msg-1",
+    purgeAt: 86_500,
+  };
 
-    const input = dynamo.commandCalls(PutCommand)[0]!.args[0].input;
-    expect(input).toEqual({
+  it("saves the first link only if there is still no item", async () => {
+    dynamo.on(PutCommand).resolves({});
+    await expect(repository.save(link, undefined)).resolves.toBe(true);
+
+    expect(dynamo.commandCalls(PutCommand)[0]!.args[0].input).toEqual({
       TableName: "magic-links",
-      Item: {
-        pk: "EMAIL#luiz@example.com",
-        email: "luiz@example.com",
-        tokenHash: "h",
-        createdAt: 100,
-        expiresAt: 700,
-        used: false,
-      },
-      ConditionExpression: "attribute_not_exists(pk) OR (#used = :true OR createdAt <= :cooldownStart)",
-      ExpressionAttributeNames: { "#used": "used" },
-      ExpressionAttributeValues: { ":true": true, ":cooldownStart": 40 },
+      Item: { pk: "EMAIL#luiz@example.com", ...link, used: false },
+      ConditionExpression: "attribute_not_exists(pk)",
     });
   });
 
-  it("never replaces a link created after the request, when it knows when that was", async () => {
+  it("replaces a link only if it is still the one the decision was based on", async () => {
     dynamo.on(PutCommand).resolves({});
-    await repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40, 90);
+    await repository.save(link, { tokenHash: "old", used: false });
 
     const input = dynamo.commandCalls(PutCommand)[0]!.args[0].input;
-    expect(input.ConditionExpression).toBe(
-      "attribute_not_exists(pk) OR ((#used = :true OR createdAt <= :cooldownStart) AND createdAt <= :requestedAt)",
-    );
-    expect(input.ExpressionAttributeValues).toEqual({ ":true": true, ":cooldownStart": 40, ":requestedAt": 90 });
+    expect(input.ConditionExpression).toBe("tokenHash = :expectedHash AND #used = :expectedUsed");
+    expect(input.ExpressionAttributeValues).toEqual({ ":expectedHash": "old", ":expectedUsed": false });
   });
 
-  it("reports a save blocked by the cooldown", async () => {
+  it("replaces its own undelivered link only while it is still undelivered", async () => {
+    dynamo.on(PutCommand).resolves({});
+    await repository.save(link, { tokenHash: "old", used: false, undelivered: true });
+
+    expect(dynamo.commandCalls(PutCommand)[0]!.args[0].input.ConditionExpression).toBe(
+      "tokenHash = :expectedHash AND #used = :expectedUsed AND attribute_not_exists(deliveredAt)",
+    );
+  });
+
+  it("reports that the item changed since it was read", async () => {
     dynamo.on(PutCommand).rejects(new ConditionalCheckFailedException({ message: "failed", $metadata: {} }));
-    await expect(
-      repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40),
-    ).resolves.toBe(false);
+    await expect(repository.save(link, undefined)).resolves.toBe(false);
   });
 
   it("propagates unexpected errors when saving", async () => {
     dynamo.on(PutCommand).rejects(new Error("boom"));
-    await expect(
-      repository.save({ email: "luiz@example.com", tokenHash: "h", createdAt: 100, expiresAt: 700 }, 40),
-    ).rejects.toThrow("boom");
+    await expect(repository.save(link, undefined)).rejects.toThrow("boom");
+  });
+
+  it("marks a link delivered, unless it was replaced meanwhile", async () => {
+    dynamo.on(UpdateCommand).resolves({});
+    await repository.markDelivered("luiz@example.com", "h", 100);
+
+    const input = dynamo.commandCalls(UpdateCommand)[0]!.args[0].input;
+    expect(input.UpdateExpression).toBe("SET deliveredAt = :now");
+    expect(input.ConditionExpression).toBe("tokenHash = :hash");
+
+    dynamo.reset();
+    dynamo.on(UpdateCommand).rejects(new ConditionalCheckFailedException({ message: "failed", $metadata: {} }));
+    await expect(repository.markDelivered("luiz@example.com", "h", 100)).resolves.toBeUndefined();
+
+    dynamo.reset();
+    dynamo.on(UpdateCommand).rejects(new Error("boom"));
+    await expect(repository.markDelivered("luiz@example.com", "h", 100)).rejects.toThrow("boom");
   });
 
   it("reads with strong consistency", async () => {

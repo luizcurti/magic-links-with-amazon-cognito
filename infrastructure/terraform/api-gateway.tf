@@ -163,6 +163,9 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.auth_refresh_post.uri,
       aws_api_gateway_method.me_get.authorization,
       aws_api_gateway_authorizer.cognito.id,
+      [for key, integration in aws_api_gateway_integration.cors : integration.id],
+      [for key, response in aws_api_gateway_integration_response.cors : response.response_parameters],
+      [for key, response in aws_api_gateway_gateway_response.cors : response.response_parameters],
     ]))
   }
 
@@ -273,4 +276,93 @@ resource "aws_lambda_permission" "api_gateway" {
   function_name = each.value
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_api_gateway_rest_api.main.execution_arn}/*/*"
+}
+
+# CORS ------------------------------------------------------------------------
+#
+# A browser on another origin (frontend_origin) must pass a preflight before a
+# JSON POST or an Authorization header. The Lambdas add the CORS headers to
+# their own responses; these cover the rest: the preflight itself, and the
+# responses API Gateway produces without calling a Lambda (401 from the
+# authorizer, 403 for unknown routes, 429 throttling, 5xx), which the browser
+# would otherwise hide from the page as a network error.
+
+locals {
+  cors_routes = {
+    login        = { resource_id = aws_api_gateway_resource.login.id, methods = "OPTIONS,POST" }
+    auth_verify  = { resource_id = aws_api_gateway_resource.auth_verify.id, methods = "OPTIONS,POST" }
+    auth_refresh = { resource_id = aws_api_gateway_resource.auth_refresh.id, methods = "OPTIONS,POST" }
+    me           = { resource_id = aws_api_gateway_resource.me.id, methods = "OPTIONS,GET" }
+    logout       = { resource_id = aws_api_gateway_resource.logout.id, methods = "OPTIONS,POST" }
+  }
+
+  cors_allowed_headers = "Content-Type,Authorization"
+}
+
+resource "aws_api_gateway_method" "cors" {
+  for_each = local.cors_routes
+
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = each.value.resource_id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "cors" {
+  for_each = local.cors_routes
+
+  rest_api_id       = aws_api_gateway_rest_api.main.id
+  resource_id       = each.value.resource_id
+  http_method       = aws_api_gateway_method.cors[each.key].http_method
+  type              = "MOCK"
+  request_templates = { "application/json" = jsonencode({ statusCode = 200 }) }
+}
+
+resource "aws_api_gateway_method_response" "cors" {
+  for_each = local.cors_routes
+
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = each.value.resource_id
+  http_method = aws_api_gateway_method.cors[each.key].http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Max-Age"       = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "cors" {
+  for_each = local.cors_routes
+
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = each.value.resource_id
+  http_method = aws_api_gateway_method.cors[each.key].http_method
+  status_code = aws_api_gateway_method_response.cors[each.key].status_code
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = "'${var.frontend_origin}'"
+    "method.response.header.Access-Control-Allow-Methods" = "'${each.value.methods}'"
+    "method.response.header.Access-Control-Allow-Headers" = "'${local.cors_allowed_headers}'"
+    "method.response.header.Access-Control-Max-Age"       = "'600'"
+  }
+
+  depends_on = [aws_api_gateway_integration.cors]
+}
+
+resource "aws_api_gateway_gateway_response" "cors" {
+  for_each = toset(["DEFAULT_4XX", "DEFAULT_5XX"])
+
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  response_type = each.key
+
+  # API Gateway's own default body, stated so Terraform does not see a diff.
+  response_templates = { "application/json" = "{\"message\":$context.error.messageString}" }
+
+  response_parameters = {
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'${var.frontend_origin}'"
+    "gatewayresponse.header.Access-Control-Allow-Headers" = "'${local.cors_allowed_headers}'"
+  }
 }

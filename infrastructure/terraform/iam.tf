@@ -73,8 +73,9 @@ resource "aws_iam_role_policy" "login" {
   policy = data.aws_iam_policy_document.login.json
 }
 
-# send-magic-link: consume the queue, store the token hash (or drop an
-# undelivered one), send the email.
+# send-magic-link: consume the queue, read the current link (cooldown), store
+# the new token hash, record the delivery (or drop an undelivered link), send
+# the email.
 data "aws_iam_policy_document" "send_magic_link" {
   source_policy_documents = [data.aws_iam_policy_document.table_kms.json]
 
@@ -84,7 +85,7 @@ data "aws_iam_policy_document" "send_magic_link" {
   }
 
   statement {
-    actions   = ["dynamodb:PutItem", "dynamodb:DeleteItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
     resources = [aws_dynamodb_table.magic_links.arn]
   }
 

@@ -25,7 +25,7 @@ curl -X POST "$API/auth/verify" -H 'Content-Type: application/json' \
 # 401 {"message":"Invalid or expired magic link"}
 
 curl "$API/me" -H "Authorization: <idToken>"
-# 200 {"sub":"…","email":"luiz@example.com","emailVerified":true,"authTime":"…","expiresAt":"…"}
+# 200 {"sub":"…","email":"luiz@example.com","emailVerified":true,"authTime":1767268800,"expiresAt":1767269700}
 
 curl -X POST "$API/auth/refresh" -H 'Content-Type: application/json' \
   -d '{"refreshToken":"<refreshToken>"}'
@@ -36,6 +36,8 @@ curl -X POST "$API/logout" -H 'Content-Type: application/json' \
   -d '{"refreshToken":"<refreshToken>"}'
 # 204
 ```
+
+**CORS.** Every route answers an `OPTIONS` preflight for `frontend_origin`, and every response, including API Gateway's own errors and the WAF's `429`, carries `Access-Control-Allow-Origin: <frontend_origin>`. Locally the Vite proxy makes all calls same-origin; see [Deployment](deployment.md#environment-variables) for a frontend on another origin.
 
 **Postman collection.** [`api/magic-links.postman_collection.json`](../api/magic-links.postman_collection.json) covers every endpoint, happy and sad paths: sign-in (it reads the magic link from LocalStack's SES mailbox), `/me`, token renewal and sign-out, plus `400` validation errors, `415` for a body not declared as JSON, `401` for wrong, reused, forged or revoked tokens, `403` for wrong methods and the cooldown. Import it into Postman and set `apiUrl` (`terraform output -raw api_url`) and `clientId` (`terraform output -raw user_pool_client_id`), or run it headless with `npm run test:api`.
 

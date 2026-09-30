@@ -38,7 +38,7 @@ This project keeps the same Cognito trigger mechanics and changes where the stat
 | What is stored | Token (KMS-encrypted payload) | **SHA-256 hash only** |
 | Throughput | Bounded by Cognito admin API limits | DynamoDB on-demand |
 | Single use | Attribute overwritten after login | Atomic `ConditionExpression` (race-safe) |
-| Cleanup | Manual | DynamoDB TTL on `expiresAt` |
+| Cleanup | Manual | DynamoDB TTL (`purgeAt`) |
 | Cognito `Session` problem | Session must outlive the email | Auth starts **when the link is opened**, so no long-lived session |
 | KMS | Encrypts the token payload | Customer-managed key for the table |
 
@@ -46,7 +46,7 @@ This project keeps the same Cognito trigger mechanics and changes where the stat
 
 ## Data model
 
-A single DynamoDB item per email. A new link replaces the old one, unless the old one is unused and younger than the cooldown (then nothing is written). A link whose email could not be sent is deleted again, so the retry is not blocked by the cooldown. A request that reaches the worker late (retry, duplicate delivery, backed-up queue) never replaces a link created after the user asked.
+A single DynamoDB item per email. A new link replaces the old one, unless the old one is unused and younger than the cooldown, which doubles with each link issued in a row without one being used (then nothing is written). The worker reads the item, decides in a pure function (`decideIssue`), and writes only if the item is unchanged (optimistic concurrency). A link whose email could not be sent is deleted again, so the retry is not blocked by the cooldown. A request that reaches the worker late (retry, duplicate delivery, backed-up queue) never replaces a link created after the user asked, except that a retry of the very request that wrote an undelivered link may replace it.
 
 | Attribute | Example | Notes |
 |---|---|---|
@@ -54,9 +54,13 @@ A single DynamoDB item per email. A new link replaces the old one, unless the ol
 | `email` | `luiz@example.com` | Normalized (trimmed, lower-case) |
 | `tokenHash` | `9f86d0…` | `SHA256(token)`, hex |
 | `createdAt` | `1767268800` | Epoch seconds |
-| `expiresAt` | `1767269400` | Epoch seconds; also the TTL attribute |
+| `expiresAt` | `1767269400` | Epoch seconds; the link stops working after this |
 | `used` | `false` | Flipped atomically on first use |
 | `usedAt` | `1767268900` | Set on consumption |
+| `streak` | `2` | Links issued in a row without one being used; drives the growing cooldown |
+| `requestId` | `1f0c…` | SQS message that issued the link, so its own retry may replace it |
+| `deliveredAt` | `1767268801` | Set once the email was handed to SES |
+| `purgeAt` | `1767355200` | Epoch seconds, a day after the write: the TTL attribute, so the streak outlives the link |
 
 ## Architectural decisions
 

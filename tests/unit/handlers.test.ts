@@ -14,7 +14,7 @@ import {
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
-import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import type { APIGatewayProxyEvent, APIGatewayProxyResult, Context, SQSBatchResponse, SQSEvent } from "aws-lambda";
 import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -165,11 +165,18 @@ describe("POST /login", () => {
 });
 
 describe("send-magic-link worker", () => {
-  it("stores the hash and emails the link", async () => {
+  const request = (body: Record<string, unknown>) => sqsEvent(JSON.stringify(body));
+
+  beforeEach(() => {
+    dynamo.on(GetCommand).resolves({});
+    dynamo.on(UpdateCommand).resolves({});
+  });
+
+  it("stores the hash, emails the link and records the delivery", async () => {
     dynamo.on(PutCommand).resolves({});
     ses.on(SendEmailCommand).resolves({ MessageId: "1" });
 
-    const result = await runWorker(sqsEvent(JSON.stringify({ email: "luiz@example.com" })));
+    const result = await runWorker(request({ email: "luiz@example.com" }));
 
     expect(result.batchItemFailures).toEqual([]);
     const item = dynamo.commandCalls(PutCommand)[0]!.args[0].input.Item!;
@@ -178,21 +185,34 @@ describe("send-magic-link worker", () => {
     expect(email.Source).toBe("no-reply@magic-links.local");
     const token = email.Message!.Body!.Text!.Data!.match(/token=([0-9a-f]{64})/)![1]!;
     expect(item.tokenHash).toBe(hashToken(token));
+    expect(item.requestId).toBe("m0");
+    expect(dynamo.commandCalls(UpdateCommand)[0]!.args[0].input.UpdateExpression).toBe("SET deliveredAt = :now");
   });
 
-  it("passes the request time on, so a late message never replaces a newer link", async () => {
-    dynamo.on(PutCommand).resolves({});
-    ses.on(SendEmailCommand).resolves({ MessageId: "1" });
+  it("does not replace a link created after the request was made", async () => {
+    dynamo.on(GetCommand).resolves(storedLink({ createdAt: 2000 }));
 
-    await runWorker(sqsEvent(JSON.stringify({ email: "luiz@example.com", requestedAt: 1234 })));
+    const result = await runWorker(request({ email: "luiz@example.com", requestedAt: 1234 }));
 
-    expect(dynamo.commandCalls(PutCommand)[0]!.args[0].input.ExpressionAttributeValues?.[":requestedAt"]).toBe(1234);
+    expect(result.batchItemFailures).toEqual([]);
+    expect(dynamo.commandCalls(PutCommand)).toHaveLength(0);
+    expect(ses.calls()).toHaveLength(0);
   });
 
   it("sends nothing during the cooldown, and does not retry", async () => {
-    dynamo.on(PutCommand).rejects(new ConditionalCheckFailedException({ message: "recent link", $metadata: {} }));
+    dynamo.on(GetCommand).resolves(storedLink({ createdAt: NOW_S }));
 
-    const result = await runWorker(sqsEvent(JSON.stringify({ email: "luiz@example.com" })));
+    const result = await runWorker(request({ email: "luiz@example.com" }));
+
+    expect(result.batchItemFailures).toEqual([]);
+    expect(dynamo.commandCalls(PutCommand)).toHaveLength(0);
+    expect(ses.calls()).toHaveLength(0);
+  });
+
+  it("sends nothing when a parallel request stored its link first", async () => {
+    dynamo.on(PutCommand).rejects(new ConditionalCheckFailedException({ message: "changed", $metadata: {} }));
+
+    const result = await runWorker(request({ email: "luiz@example.com" }));
 
     expect(result.batchItemFailures).toEqual([]);
     expect(ses.calls()).toHaveLength(0);
@@ -203,7 +223,7 @@ describe("send-magic-link worker", () => {
     dynamo.on(DeleteCommand).resolves({});
     ses.on(SendEmailCommand).rejects(new Error("SES is down"));
 
-    const result = await runWorker(sqsEvent(JSON.stringify({ email: "luiz@example.com" })));
+    const result = await runWorker(request({ email: "luiz@example.com" }));
 
     expect(result.batchItemFailures).toEqual([{ itemIdentifier: "m0" }]);
     const stored = dynamo.commandCalls(PutCommand)[0]!.args[0].input.Item!;
@@ -212,16 +232,18 @@ describe("send-magic-link worker", () => {
     );
   });
 
-  it("retries only the failed messages of a batch", async () => {
+  it("processes a batch in parallel and retries only the failed messages", async () => {
     dynamo.on(PutCommand).resolves({});
     dynamo.on(DeleteCommand).resolves({});
-    ses.on(SendEmailCommand).rejectsOnce(new Error("SES is down")).resolves({ MessageId: "2" });
+    ses.on(SendEmailCommand).resolves({ MessageId: "2" });
+    ses.on(SendEmailCommand, { Destination: { ToAddresses: ["a@example.com"] } }).rejects(new Error("SES is down"));
 
     const result = await runWorker(
       sqsEvent(JSON.stringify({ email: "a@example.com" }), JSON.stringify({ email: "b@example.com" })),
     );
 
     expect(result.batchItemFailures).toEqual([{ itemIdentifier: "m0" }]);
+    expect(ses.calls()).toHaveLength(2);
   });
 
   it.each([
@@ -454,7 +476,11 @@ describe("GET /me", () => {
     const response = await callMe(sign(validClaims()));
 
     expect(response.statusCode).toBe(200);
-    expect(JSON.parse(response.body)).toMatchObject({ sub: "sub-1", email: "luiz@example.com", emailVerified: true });
+    const body = JSON.parse(response.body);
+    expect(body).toMatchObject({ sub: "sub-1", email: "luiz@example.com", emailVerified: true });
+    // Epoch seconds, as numbers: what the frontend's Profile type declares.
+    expect(typeof body.authTime).toBe("number");
+    expect(typeof body.expiresAt).toBe("number");
   });
 
   it("accepts a Bearer prefix, and email_verified as the string LocalStack uses", async () => {

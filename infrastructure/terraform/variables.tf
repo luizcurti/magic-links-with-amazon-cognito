@@ -117,13 +117,24 @@ variable "send_magic_link_max_concurrency" {
 }
 
 variable "magic_link_cooldown_seconds" {
-  description = "Minimum time between two magic links for the same email (email-bombing protection)."
+  description = "Minimum time between two magic links for the same email (email-bombing protection); doubles with each unused link."
   type        = number
   default     = 60
 
   validation {
     condition     = var.magic_link_cooldown_seconds >= 1 && var.magic_link_cooldown_seconds <= 3600
     error_message = "magic_link_cooldown_seconds must be between 1 and 3600."
+  }
+}
+
+variable "magic_link_max_cooldown_seconds" {
+  description = "Ceiling of the per-email cooldown, which doubles with each link issued in a row without one being used."
+  type        = number
+  default     = 900
+
+  validation {
+    condition     = var.magic_link_max_cooldown_seconds >= 60 && var.magic_link_max_cooldown_seconds <= 3600
+    error_message = "magic_link_max_cooldown_seconds must be between 60 and 3600."
   }
 }
 

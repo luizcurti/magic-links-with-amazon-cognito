@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ExpectedLink,
   MagicLinkRecord,
   MagicLinkRepository,
   NewMagicLink,
 } from "../../apps/api/src/repositories/magic-link.repository.js";
 import type { EmailSender, MagicLinkEmail } from "../../apps/api/src/services/email.service.js";
-import { evaluateMagicLink, MagicLinkService } from "../../apps/api/src/services/magic-link.service.js";
+import {
+  decideIssue,
+  evaluateMagicLink,
+  MagicLinkService,
+  STREAK_RESET_SECONDS,
+} from "../../apps/api/src/services/magic-link.service.js";
 import { hashToken } from "../../apps/api/src/services/token.service.js";
 
 const EMAIL = "luiz@example.com";
@@ -16,15 +22,29 @@ const NOW_S = NOW.getTime() / 1000;
 class InMemoryRepository {
   items = new Map<string, MagicLinkRecord>();
 
-  async save(link: NewMagicLink, cooldownStart: number, requestedAt?: number): Promise<boolean> {
-    const previous = this.items.get(link.email);
-    if (previous && !previous.used && previous.createdAt > cooldownStart) return false;
-    if (previous && requestedAt !== undefined && previous.createdAt > requestedAt) return false;
+  deleteFailure: Error | undefined;
+
+  async save(link: NewMagicLink, expected: ExpectedLink | undefined): Promise<boolean> {
+    const current = this.items.get(link.email);
+    const unchanged =
+      expected === undefined
+        ? current === undefined
+        : current !== undefined &&
+          current.tokenHash === expected.tokenHash &&
+          current.used === expected.used &&
+          !(expected.undelivered && current.deliveredAt !== undefined);
+    if (!unchanged) return false;
     this.items.set(link.email, { pk: `EMAIL#${link.email}`, ...link, used: false });
     return true;
   }
 
+  async markDelivered(email: string, tokenHash: string, now: number) {
+    const item = this.items.get(email);
+    if (item?.tokenHash === tokenHash) item.deliveredAt = now;
+  }
+
   async deleteUndelivered(email: string, tokenHash: string) {
+    if (this.deleteFailure) throw this.deleteFailure;
     const item = this.items.get(email);
     if (item && !item.used && item.tokenHash === tokenHash) this.items.delete(email);
   }
@@ -126,6 +146,41 @@ describe("MagicLinkService", () => {
       await expect(service.requestMagicLink(EMAIL)).resolves.toMatchObject({ status: "SENT" });
       expect(emailSender.sent).toHaveLength(1);
     });
+
+    it("if even the rollback fails, the retry of the same request replaces its own undelivered link", async () => {
+      emailSender.failure = new Error("SES is down");
+      repository.deleteFailure = new Error("DynamoDB is down");
+      await expect(service.requestMagicLink(EMAIL, { requestId: "msg-1" })).rejects.toThrow("SES is down");
+      expect(repository.items.size).toBe(1); // the undelivered link is still there
+
+      emailSender.failure = undefined;
+      repository.deleteFailure = undefined;
+      now = new Date(NOW.getTime() + 5_000); // well inside the cooldown
+      await expect(service.requestMagicLink(EMAIL, { requestId: "msg-1" })).resolves.toMatchObject({ status: "SENT" });
+      await expect(service.consumeMagicLink(EMAIL, emailSender.lastToken())).resolves.toBe("VALID");
+    });
+
+    it("another request does not get that privilege", async () => {
+      emailSender.failure = new Error("SES is down");
+      repository.deleteFailure = new Error("DynamoDB is down");
+      await expect(service.requestMagicLink(EMAIL, { requestId: "msg-1" })).rejects.toThrow();
+
+      emailSender.failure = undefined;
+      await expect(service.requestMagicLink(EMAIL, { requestId: "msg-2" })).resolves.toEqual({ status: "COOLDOWN" });
+    });
+
+    it("a retry after a successful send (the worker died afterwards) sends nothing twice", async () => {
+      await service.requestMagicLink(EMAIL, { requestId: "msg-1" });
+      now = new Date(NOW.getTime() + 5_000);
+
+      await expect(service.requestMagicLink(EMAIL, { requestId: "msg-1" })).resolves.toEqual({ status: "COOLDOWN" });
+      expect(emailSender.sent).toHaveLength(1);
+    });
+
+    it("still reports the send as done when recording the delivery fails", async () => {
+      vi.spyOn(repository, "markDelivered").mockRejectedValueOnce(new Error("DynamoDB is down"));
+      await expect(service.requestMagicLink(EMAIL)).resolves.toMatchObject({ status: "SENT" });
+    });
   });
 
   describe("cooldown (email-bombing protection)", () => {
@@ -160,26 +215,64 @@ describe("MagicLinkService", () => {
       // (12:00:10) delivered a link. A's retry lands well past the cooldown.
       const requestA = NOW_S;
       now = new Date(NOW.getTime() + 10_000);
-      await service.requestMagicLink(EMAIL, NOW_S + 10);
+      await service.requestMagicLink(EMAIL, { requestedAt: NOW_S + 10 });
       const linkB = emailSender.lastToken();
 
       now = new Date(NOW.getTime() + 130_000);
-      await expect(service.requestMagicLink(EMAIL, requestA)).resolves.toEqual({ status: "COOLDOWN" });
+      await expect(service.requestMagicLink(EMAIL, { requestedAt: requestA })).resolves.toEqual({
+        status: "SUPERSEDED",
+      });
 
       expect(emailSender.sent).toHaveLength(1);
       await expect(service.consumeMagicLink(EMAIL, linkB)).resolves.toBe("VALID");
     });
 
     it("a request made after the previous link still gets a new one once the cooldown allows", async () => {
-      await service.requestMagicLink(EMAIL, NOW_S);
+      await service.requestMagicLink(EMAIL, { requestedAt: NOW_S });
       now = new Date(NOW.getTime() + 61_000);
-      await expect(service.requestMagicLink(EMAIL, NOW_S + 61)).resolves.toMatchObject({ status: "SENT" });
+      await expect(service.requestMagicLink(EMAIL, { requestedAt: NOW_S + 61 })).resolves.toMatchObject({
+        status: "SENT",
+      });
     });
 
     it("a user who used their link can ask for another within the same second", async () => {
-      await service.requestMagicLink(EMAIL, NOW_S);
+      await service.requestMagicLink(EMAIL, { requestedAt: NOW_S });
       await service.consumeMagicLink(EMAIL, emailSender.lastToken());
-      await expect(service.requestMagicLink(EMAIL, NOW_S)).resolves.toMatchObject({ status: "SENT" });
+      await expect(service.requestMagicLink(EMAIL, { requestedAt: NOW_S })).resolves.toMatchObject({ status: "SENT" });
+    });
+
+    it("grows with each unused link: 60 s, 120 s, 240 s …, so a flood gets few emails through", async () => {
+      const sentAfter = async (seconds: number) => {
+        now = new Date(now.getTime() + seconds * 1000);
+        return (await service.requestMagicLink(EMAIL)).status;
+      };
+
+      expect(await sentAfter(0)).toBe("SENT"); // streak 0
+      expect(await sentAfter(60)).toBe("SENT"); // waited 60 s → streak 1
+      expect(await sentAfter(119)).toBe("COOLDOWN"); // needs 120 s now
+      expect(await sentAfter(1)).toBe("SENT"); // 120 s → streak 2
+      expect(await sentAfter(239)).toBe("COOLDOWN");
+      expect(await sentAfter(1)).toBe("SENT"); // 240 s
+    });
+
+    it("an attacker requesting nonstop gets at most a handful of emails an hour through", async () => {
+      for (let second = 0; second < 3600; second += 5) {
+        now = new Date(NOW.getTime() + second * 1000);
+        await service.requestMagicLink(EMAIL);
+      }
+      // 0, 60, 180, 420, 900, 1800, 2700 (then capped at 15 min)
+      expect(emailSender.sent.length).toBeLessThanOrEqual(7);
+    });
+
+    it("resets once a link is used", async () => {
+      await service.requestMagicLink(EMAIL);
+      now = new Date(NOW.getTime() + 60_000);
+      await service.requestMagicLink(EMAIL); // streak 1
+      await service.consumeMagicLink(EMAIL, emailSender.lastToken());
+
+      await expect(service.requestMagicLink(EMAIL)).resolves.toMatchObject({ status: "SENT" });
+      now = new Date(NOW.getTime() + 120_000);
+      await expect(service.requestMagicLink(EMAIL)).resolves.toMatchObject({ status: "SENT" }); // back to 60 s
     });
 
     it("applies per email, not globally", async () => {
@@ -267,6 +360,7 @@ describe("evaluateMagicLink", () => {
     createdAt: NOW_S,
     expiresAt: NOW_S + 600,
     used: false,
+    purgeAt: NOW_S + 86_400,
   };
 
   it.each([
@@ -278,5 +372,66 @@ describe("evaluateMagicLink", () => {
     ["expired at the boundary", record, EMAIL, hash, NOW_S + 600, "EXPIRED"],
   ] as const)("%s", (_label, input, email, tokenHash, now, expected) => {
     expect(evaluateMagicLink(input, email, tokenHash, now)).toBe(expected);
+  });
+});
+
+describe("decideIssue", () => {
+  const policy = { cooldownSeconds: 60, maxCooldownSeconds: 900 };
+  const record = (overrides: Partial<MagicLinkRecord> = {}): MagicLinkRecord => ({
+    pk: `EMAIL#${EMAIL}`,
+    email: EMAIL,
+    tokenHash: "h",
+    createdAt: NOW_S,
+    expiresAt: NOW_S + 600,
+    used: false,
+    purgeAt: NOW_S + 86_400,
+    ...overrides,
+  });
+
+  it("allows the first link", () => {
+    expect(decideIssue(undefined, NOW_S, {}, policy)).toEqual({
+      allowed: true,
+      streak: 0,
+      replacingOwnUndelivered: false,
+    });
+  });
+
+  it("treats items written before streaks existed as streak 0", () => {
+    expect(decideIssue(record(), NOW_S + 60, {}, policy)).toMatchObject({ allowed: true, streak: 1 });
+  });
+
+  it("caps the cooldown", () => {
+    expect(decideIssue(record({ streak: 20 }), NOW_S + 899, {}, policy)).toMatchObject({ allowed: false });
+    expect(decideIssue(record({ streak: 20 }), NOW_S + 900, {}, policy)).toMatchObject({ allowed: true, streak: 21 });
+  });
+
+  it("forgets an unused streak after an hour without requests", () => {
+    expect(decideIssue(record({ streak: 6 }), NOW_S + STREAK_RESET_SECONDS, {}, policy)).toMatchObject({
+      allowed: true,
+      streak: 0,
+    });
+  });
+
+  it("lets a retry replace its own undelivered link, keeping the streak", () => {
+    expect(decideIssue(record({ streak: 3, requestId: "m" }), NOW_S + 1, { requestId: "m" }, policy)).toEqual({
+      allowed: true,
+      streak: 3,
+      replacingOwnUndelivered: true,
+    });
+  });
+
+  it("does not let a retry replace its own link once it was delivered", () => {
+    const delivered = record({ requestId: "m", deliveredAt: NOW_S });
+    expect(decideIssue(delivered, NOW_S + 1, { requestId: "m" }, policy)).toEqual({
+      allowed: false,
+      status: "COOLDOWN",
+    });
+  });
+
+  it("never lets a late request replace a newer link, even a used one", () => {
+    expect(decideIssue(record({ used: true }), NOW_S + 999, { requestedAt: NOW_S - 1 }, policy)).toEqual({
+      allowed: false,
+      status: "SUPERSEDED",
+    });
   });
 });

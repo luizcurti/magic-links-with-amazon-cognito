@@ -10,9 +10,19 @@ export interface Profile {
   sub: string;
   email: string;
   emailVerified: boolean;
-  authTime: string;
-  expiresAt: string;
+  /** Epoch seconds: when the user signed in with the magic link. */
+  authTime: number;
+  /** Epoch seconds: when the ID token expires. */
+  expiresAt: number;
 }
+
+/**
+ * Where the API lives. Locally the Vite dev server proxies /api to API
+ * Gateway (same origin, no CORS). A build served from another origin sets
+ * VITE_API_BASE_URL to the API Gateway URL; the API answers CORS preflights
+ * for frontend_origin (see api-gateway.tf).
+ */
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(/\/$/, "");
 
 export class ApiError extends Error {
   constructor(
@@ -24,7 +34,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...init.headers },
   });

@@ -139,11 +139,12 @@ resource "aws_lambda_function" "send_magic_link" {
 
   environment {
     variables = merge(local.common_env, {
-      MAGIC_LINKS_TABLE           = aws_dynamodb_table.magic_links.name
-      SES_FROM_ADDRESS            = aws_ses_email_identity.sender.email
-      MAGIC_LINK_CALLBACK_URL     = var.magic_link_callback_url
-      MAGIC_LINK_TTL_SECONDS      = tostring(var.magic_link_ttl_seconds)
-      MAGIC_LINK_COOLDOWN_SECONDS = tostring(var.magic_link_cooldown_seconds)
+      MAGIC_LINKS_TABLE               = aws_dynamodb_table.magic_links.name
+      SES_FROM_ADDRESS                = aws_ses_email_identity.sender.email
+      MAGIC_LINK_CALLBACK_URL         = var.magic_link_callback_url
+      MAGIC_LINK_TTL_SECONDS          = tostring(var.magic_link_ttl_seconds)
+      MAGIC_LINK_COOLDOWN_SECONDS     = tostring(var.magic_link_cooldown_seconds)
+      MAGIC_LINK_MAX_COOLDOWN_SECONDS = tostring(var.magic_link_max_cooldown_seconds)
     })
   }
 }

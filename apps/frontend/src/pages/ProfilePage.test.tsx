@@ -7,7 +7,7 @@ const base64url = (value: object) =>
   btoa(JSON.stringify(value)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 const ID_TOKEN = `${base64url({ alg: "RS256" })}.${base64url({ email: "luiz@example.com", "custom:x": "a?b>" })}.sig`;
 const TOKENS = { idToken: ID_TOKEN, accessToken: "access", expiresIn: 3600, tokenType: "Bearer" };
-const PROFILE = { sub: "sub-1", email: "luiz@example.com", emailVerified: true, authTime: "1", expiresAt: "2" };
+const PROFILE = { sub: "sub-1", email: "luiz@example.com", emailVerified: true, authTime: 1, expiresAt: 2 };
 
 describe("ProfilePage", () => {
   beforeEach(() => {

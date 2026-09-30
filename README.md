@@ -17,7 +17,7 @@ Enter your email, click the link you receive, and you get Cognito JWTs. No passw
 - **Secure tokens:** 256-bit random, stored only as SHA-256 hashes, single use (atomic conditional write), 10-minute expiry.
 - **No enumeration:** `/login` answers the same, in the same time, for every email; Cognito gives unknown users a decoy challenge.
 - **Scanner-safe links:** parameters in the URL fragment, and nothing happens until the user clicks "Sign in as …?".
-- **Abuse limits:** per-email cooldown, WAF per-IP limits and per-route throttling; emails go through SQS with retries and a dead-letter queue.
+- **Abuse limits:** a per-email cooldown that grows with each unused link (a few emails an hour at most), WAF per-IP limits and per-route throttling; emails go through SQS with retries and a dead-letter queue.
 - **Real sessions:** 15-minute JWTs renewed silently, verified again in the Lambda, and a sign-out that revokes the refresh token.
 - **Tested end to end:** 100% unit coverage, integration tests against LocalStack, a Postman collection, Playwright E2E, and AWS smoke tests.
 

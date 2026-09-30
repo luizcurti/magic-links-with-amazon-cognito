@@ -29,6 +29,12 @@ resource "aws_wafv2_web_acl" "api" {
             name  = "Retry-After"
             value = tostring(var.waf_rate_window_seconds)
           }
+
+          # Without it, the browser hides the 429 from the frontend as a network error.
+          response_header {
+            name  = "Access-Control-Allow-Origin"
+            value = var.frontend_origin
+          }
         }
       }
     }
@@ -89,6 +95,12 @@ resource "aws_wafv2_web_acl" "api" {
           response_header {
             name  = "Retry-After"
             value = tostring(var.waf_rate_window_seconds)
+          }
+
+          # Without it, the browser hides the 429 from the frontend as a network error.
+          response_header {
+            name  = "Access-Control-Allow-Origin"
+            value = var.frontend_origin
           }
         }
       }

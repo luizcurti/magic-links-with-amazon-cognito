@@ -163,20 +163,24 @@ describe.runIf(stack)("real AWS smoke tests", { timeout: 180_000 }, () => {
     const me = (authorization: string) => fetch(`${stack?.apiUrl}/me`, { headers: { Authorization: authorization } });
 
     expect((await me(idToken)).status).toBe(200);
-    expect((await me(`${header}.${forged}.${signature}`)).status).toBe(401);
+    const rejected = await me(`${header}.${forged}.${signature}`);
+    expect(rejected.status).toBe(401);
+    // API Gateway's own 401 must still let a cross-origin frontend read the status.
+    expect(rejected.headers.get("access-control-allow-origin")).toBeTruthy();
     expect((await me(`${none}.${forged}.`)).status).toBeGreaterThanOrEqual(401);
   });
 
   // Last: it blocks POST /login from this IP for the WAF window.
   it("WAF rate-limits POST /login per IP, including /login/ and //login", async () => {
-    let blocked = false;
+    let blocked: Response | undefined;
     // Rate-based rules take a little while to aggregate: keep asking until the block shows up.
     for (let i = 0; i < 60 && !blocked; i++) {
       const response = await post("/login", { email: `success+smoke${i}@simulator.amazonses.com` });
-      blocked = response.status === 429;
-      if (!blocked) await sleep(1_500);
+      if (response.status === 429) blocked = response;
+      else await sleep(1_500);
     }
-    expect(blocked).toBe(true);
+    expect(blocked?.status).toBe(429);
+    expect(blocked?.headers.get("access-control-allow-origin")).toBeTruthy();
 
     for (const path of ["/login/", "//login"]) {
       const response = await post(path, { email: "success@simulator.amazonses.com" });
