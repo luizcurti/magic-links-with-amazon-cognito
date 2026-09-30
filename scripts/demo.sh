@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end demo of the magic-link flow using only curl.
+# End-to-end demo of the magic-link flow from the terminal (curl, jq and the SES mailbox reader).
 set -euo pipefail
 
 EMAIL="${1:-luiz@example.com}"

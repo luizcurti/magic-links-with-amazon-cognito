@@ -192,4 +192,45 @@ describe("CognitoService", () => {
       await expect(service.revokeRefreshToken("refresh")).rejects.toBeInstanceOf(TooManyRequestsException);
     });
   });
+
+  describe("refreshSession", () => {
+    it("exchanges the refresh token for new tokens", async () => {
+      cognito.on(InitiateAuthCommand).resolves({
+        AuthenticationResult: { IdToken: "id-2", AccessToken: "access-2", ExpiresIn: 900, TokenType: "Bearer" },
+      });
+
+      await expect(service.refreshSession("refresh")).resolves.toEqual({
+        idToken: "id-2",
+        accessToken: "access-2",
+        refreshToken: undefined,
+        expiresIn: 900,
+        tokenType: "Bearer",
+      });
+      expect(cognito.commandCalls(InitiateAuthCommand)[0]?.args[0].input).toEqual({
+        AuthFlow: "REFRESH_TOKEN_AUTH",
+        ClientId: "client-id",
+        AuthParameters: { REFRESH_TOKEN: "refresh" },
+      });
+    });
+
+    it("reports a revoked or expired refresh token as an authentication error", async () => {
+      cognito
+        .on(InitiateAuthCommand)
+        .rejects(new NotAuthorizedException({ message: "Refresh Token has been revoked", $metadata: {} }));
+
+      await expect(service.refreshSession("revoked")).rejects.toThrow(
+        new AuthenticationError("Session expired or revoked"),
+      );
+    });
+
+    it("rejects an answer without tokens", async () => {
+      cognito.on(InitiateAuthCommand).resolves({});
+      await expect(service.refreshSession("refresh")).rejects.toBeInstanceOf(AuthenticationError);
+    });
+
+    it("propagates throttling", async () => {
+      cognito.on(InitiateAuthCommand).rejects(new TooManyRequestsException({ message: "slow down", $metadata: {} }));
+      await expect(service.refreshSession("refresh")).rejects.toBeInstanceOf(TooManyRequestsException);
+    });
+  });
 });

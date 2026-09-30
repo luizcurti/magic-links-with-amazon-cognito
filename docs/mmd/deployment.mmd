@@ -3,12 +3,12 @@ flowchart LR
         TF["Terraform<br/>infrastructure/terraform"]
         ESB["esbuild<br/>dist/&lt;fn&gt;/index.js"]
         VITE["Vite dev server :5173<br/>/api proxy"]
-        TESTS["Vitest integration<br/>+ newman collection"]
+        TESTS["Vitest integration<br/>newman collection<br/>Playwright browser E2E"]
     end
 
     subgraph Docker["Docker"]
         subgraph Compose["docker compose"]
-            LS["LocalStack :4566<br/>API GW · Lambda · Cognito · DynamoDB<br/>SES · KMS · IAM · CloudWatch Logs"]
+            LS["LocalStack :4566<br/>API GW · WAF · Lambda · Cognito<br/>DynamoDB · SES · KMS · IAM · CloudWatch Logs"]
         end
         FN["Lambda runtime containers<br/>(siblings on network magic-links)"]
     end
@@ -18,3 +18,4 @@ flowchart LR
     LS -- "docker.sock" --> FN
     VITE -- "HTTP" --> LS
     TESTS -- "HTTP + /_aws/ses" --> LS
+    TESTS -- "browser" --> VITE

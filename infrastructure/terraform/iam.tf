@@ -16,6 +16,7 @@ locals {
     "auth-callback",
     "me",
     "logout",
+    "refresh",
     "define-auth-challenge",
     "create-auth-challenge",
     "verify-auth-challenge",
@@ -57,7 +58,7 @@ data "aws_iam_policy_document" "table_kms" {
   }
 }
 
-# login: create the Cognito user, store the token hash, send the email.
+# login: create (or repair) the Cognito user, store the token hash, send the email.
 data "aws_iam_policy_document" "login" {
   source_policy_documents = [data.aws_iam_policy_document.table_kms.json]
 
@@ -99,6 +100,6 @@ resource "aws_iam_role_policy" "verify_auth_challenge" {
   policy = data.aws_iam_policy_document.verify_auth_challenge.json
 }
 
-# auth-callback (InitiateAuth / RespondToAuthChallenge) and logout (RevokeToken)
+# auth-callback (InitiateAuth / RespondToAuthChallenge), refresh (InitiateAuth) and logout (RevokeToken)
 # only call public, unauthenticated Cognito APIs, so they need no extra permissions.
-# define/create-auth-challenge and me are pure functions: logs only.
+# define/create-auth-challenge and me call no AWS API: logs and X-Ray only.

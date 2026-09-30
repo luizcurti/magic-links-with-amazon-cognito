@@ -39,7 +39,7 @@ describe("CallbackPage", () => {
       "/api/auth/verify",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ email: "luiz@example.com", token }) }),
     );
-    expect(session.load()).toEqual(TOKENS);
+    expect(session.load()).toMatchObject(TOKENS);
   });
 
   it("removes the token from the address bar before calling the API", () => {

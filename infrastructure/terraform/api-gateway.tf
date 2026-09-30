@@ -69,6 +69,30 @@ resource "aws_api_gateway_integration" "auth_verify_post" {
   uri                     = aws_lambda_function.auth_callback.invoke_arn
 }
 
+# /auth/refresh --------------------------------------------------------------
+
+resource "aws_api_gateway_resource" "auth_refresh" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  parent_id   = aws_api_gateway_resource.auth.id
+  path_part   = "refresh"
+}
+
+resource "aws_api_gateway_method" "auth_refresh_post" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.auth_refresh.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "auth_refresh_post" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.auth_refresh.id
+  http_method             = aws_api_gateway_method.auth_refresh_post.http_method
+  type                    = "AWS_PROXY"
+  integration_http_method = "POST"
+  uri                     = aws_lambda_function.refresh.invoke_arn
+}
+
 # /me (protected by the Cognito authorizer) ------------------------------------
 
 resource "aws_api_gateway_resource" "me" {
@@ -135,6 +159,8 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.me_get.uri,
       aws_api_gateway_integration.logout_post.id,
       aws_api_gateway_integration.logout_post.uri,
+      aws_api_gateway_integration.auth_refresh_post.id,
+      aws_api_gateway_integration.auth_refresh_post.uri,
       aws_api_gateway_method.me_get.authorization,
       aws_api_gateway_authorizer.cognito.id,
     ]))
@@ -168,9 +194,8 @@ resource "aws_api_gateway_stage" "main" {
   depends_on = [aws_api_gateway_account.main]
 }
 
-# Every route is public except /me, and /login sends email: throttle the
-# whole stage to keep a single client from email-bombing or exhausting
-# Lambda concurrency.
+# Stage-wide limits cap total traffic, and with it Lambda concurrency. Limits
+# per client live in the WAF (waf.tf), limits per email in the login Lambda.
 resource "aws_api_gateway_method_settings" "all" {
   rest_api_id = aws_api_gateway_rest_api.main.id
   stage_name  = aws_api_gateway_stage.main.stage_name
@@ -223,6 +248,7 @@ resource "aws_lambda_permission" "api_gateway" {
     auth_callback = aws_lambda_function.auth_callback.function_name
     me            = aws_lambda_function.me.function_name
     logout        = aws_lambda_function.logout.function_name
+    refresh       = aws_lambda_function.refresh.function_name
   }
 
   statement_id  = "AllowApiGatewayInvoke"

@@ -6,7 +6,7 @@ EMAIL ?= luiz@example.com
 .PHONY: help install up down logs build infra destroy outputs env login emails link verify demo frontend test test-integration test-api test-e2e lint typecheck tf-scan check clean
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 install: ## Install npm dependencies
 	npm install

@@ -9,7 +9,7 @@ skip-check:
   # Lambda
   - CKV_AWS_116 # DLQ: every invocation is synchronous (API Gateway, Cognito triggers); DLQs only apply to async invokes.
   - CKV_AWS_117 # VPC: the functions only call public AWS APIs; a VPC adds NAT/endpoints cost with no security gain.
-  - CKV_AWS_115 # Reserved concurrency: concurrency is bounded by API Gateway stage throttling instead.
+  - CKV_AWS_115 # Reserved concurrency: concurrency is bounded by API Gateway stage throttling and WAF per-IP limits instead.
   - CKV_AWS_173 # Env var CMK: environment variables hold only resource names/URLs, never secrets.
   - CKV_AWS_272 # Code signing: needs AWS Signer profiles; out of scope for a LocalStack deployment.
   # API Gateway

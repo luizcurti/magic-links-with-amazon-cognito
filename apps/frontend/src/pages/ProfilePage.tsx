@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ApiError, api, type Profile } from "../api";
+import { withSession } from "../auth";
 import { navigate } from "../router";
 import { session } from "../session";
 
@@ -14,19 +15,28 @@ function decodeJwtPayload(jwt: string): Record<string, unknown> {
 }
 
 export function ProfilePage() {
-  const [tokens] = useState(session.load);
+  const [signedIn] = useState(() => session.load() !== undefined);
+  const [idToken, setIdToken] = useState(() => session.load()?.idToken ?? "");
   const [profile, setProfile] = useState<Profile>();
   const [error, setError] = useState<string>();
   const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
-    if (!tokens) {
+    if (!signedIn) {
       navigate("/");
       return;
     }
-    api
-      .me(tokens.idToken)
-      .then(setProfile)
+    // The call may renew the tokens: show the claims of the one actually used.
+    let usedToken = "";
+    withSession((token) => {
+      usedToken = token;
+      return api.me(token);
+    })
+      .then((me) => {
+        if (!me) return navigate("/");
+        setProfile(me);
+        setIdToken(usedToken);
+      })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           session.clear();
@@ -35,19 +45,20 @@ export function ProfilePage() {
           setError((err as Error).message);
         }
       });
-  }, [tokens]);
+  }, [signedIn]);
 
-  if (!tokens) return null;
+  if (!signedIn) return null;
 
   async function signOut() {
     setSigningOut(true);
     // Revoke server-side first; the local session is dropped even if that fails.
-    if (tokens?.refreshToken) await api.logout(tokens.refreshToken).catch(() => undefined);
+    const refreshToken = session.load()?.refreshToken;
+    if (refreshToken) await api.logout(refreshToken).catch(() => undefined);
     session.clear();
     navigate("/");
   }
 
-  const claims = decodeJwtPayload(tokens.idToken);
+  const claims = decodeJwtPayload(idToken);
 
   return (
     <>

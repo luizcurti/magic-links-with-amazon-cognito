@@ -28,6 +28,14 @@ async function requestLinkInBrowser(page: Page, email: string): Promise<URL> {
   return waitForMagicLink(email, sentAfter);
 }
 
+/** Makes the stored session look expired, as if the tab had been open for 15 minutes. */
+const expireStoredSession = (page: Page) =>
+  page.evaluate(() => {
+    const key = "magic-links.session";
+    const stored = JSON.parse(sessionStorage.getItem(key) ?? "{}");
+    sessionStorage.setItem(key, JSON.stringify({ ...stored, expiresAt: Date.now() - 1 }));
+  });
+
 /** The link opened in the browser, i.e. what the user clicks in their inbox. */
 const inBrowser = (link: URL) => `${link.pathname}${link.search}`;
 
@@ -61,6 +69,23 @@ test.describe("happy path", () => {
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
   });
 
+  test("an expired session is renewed silently", async ({ page }) => {
+    const email = uniqueEmail("renew");
+    const link = await requestLinkInBrowser(page, email);
+    await page.goto(inBrowser(link));
+    await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
+
+    await expireStoredSession(page);
+    const renewal = page.waitForResponse((response) => response.url().endsWith("/api/auth/refresh"));
+    await page.reload();
+
+    expect((await renewal).status()).toBe(200);
+    await expect(page.getByText(email, { exact: true })).toBeVisible();
+    expect(
+      await page.evaluate(() => JSON.parse(sessionStorage.getItem("magic-links.session") ?? "{}").expiresAt),
+    ).toBeGreaterThan(Date.now() + 14 * 60_000);
+  });
+
   test("the token never stays in the address bar or history", async ({ page }) => {
     const link = await requestLinkInBrowser(page, uniqueEmail("history"));
 
@@ -78,6 +103,24 @@ test.describe("happy path", () => {
 });
 
 test.describe("sad path", () => {
+  test("a session revoked elsewhere cannot be renewed and goes back to login", async ({ page, request }) => {
+    const link = await requestLinkInBrowser(page, uniqueEmail("revoked"));
+    await page.goto(inBrowser(link));
+    await expect(page.getByRole("heading", { name: "You are signed in" })).toBeVisible();
+
+    // Sign out from "another device": revoke the same refresh token through the API.
+    const refreshToken = await page.evaluate(
+      () => JSON.parse(sessionStorage.getItem("magic-links.session") ?? "{}").refreshToken as string,
+    );
+    expect((await request.post("/api/logout", { data: { refreshToken } })).status()).toBe(204);
+
+    await expireStoredSession(page);
+    await page.reload();
+
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+    expect(await page.evaluate(() => sessionStorage.getItem("magic-links.session"))).toBeNull();
+  });
+
   test("a link opened twice works only the first time", async ({ page, browser }) => {
     const link = await requestLinkInBrowser(page, uniqueEmail("twice"));
     await page.goto(inBrowser(link));

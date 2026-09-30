@@ -42,6 +42,9 @@ export const api = {
   verifyMagicLink: (email: string, token: string) =>
     request<AuthTokens>("/auth/verify", { method: "POST", body: JSON.stringify({ email, token }) }),
 
+  refresh: (refreshToken: string) =>
+    request<AuthTokens>("/auth/refresh", { method: "POST", body: JSON.stringify({ refreshToken }) }),
+
   logout: (refreshToken: string) =>
     request<unknown>("/logout", { method: "POST", body: JSON.stringify({ refreshToken }) }),
 

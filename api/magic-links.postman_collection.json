@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Magic Links with Amazon Cognito",
-    "description": "API contract tests. Run in order: each folder feeds variables to the next. `npm run test:api` runs it with newman against the stack deployed on LocalStack.",
+    "description": "API contract tests, happy and sad paths: sign-in, /me, token renewal and sign-out. Run in order: each folder feeds variables to the next. Set `apiUrl` (terraform output -raw api_url) and `clientId` (terraform output -raw user_pool_client_id); `npm run test:api` does both and runs it with newman against the stack deployed on LocalStack.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -39,6 +39,10 @@
     },
     {
       "key": "clientId",
+      "value": ""
+    },
+    {
+      "key": "renewedIdToken",
       "value": ""
     }
   ],
@@ -520,7 +524,8 @@
                   "});",
                   "pm.collectionVariables.set(\"idToken\", body.idToken);",
                   "pm.collectionVariables.set(\"accessToken\", body.accessToken);",
-                  "pm.collectionVariables.set(\"refreshToken\", body.refreshToken);"
+                  "pm.collectionVariables.set(\"refreshToken\", body.refreshToken);",
+                  "pm.test(\"tokens live 15 minutes\", () => pm.expect(body.expiresIn).to.eql(900));"
                 ]
               }
             }
@@ -658,6 +663,128 @@
       ]
     },
     {
+      "name": "POST /auth/refresh",
+      "item": [
+        {
+          "name": "400 - refresh token is missing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/refresh",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 400\", () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - refresh token Cognito never issued",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/refresh",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refreshToken\": \"forged.refresh.token\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"says the session is over\", () => pm.expect(pm.response.json()).to.eql({ message: \"Session expired or revoked\" }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 - renews the ID and access tokens",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/refresh",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refreshToken\": \"{{refreshToken}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 200\", () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test(\"returns new 15-minute tokens\", () => {",
+                  "  pm.expect(body.idToken.split(\".\")).to.have.lengthOf(3);",
+                  "  pm.expect(body.idToken).to.not.eql(pm.collectionVariables.get(\"idToken\"));",
+                  "  pm.expect(body.expiresIn).to.eql(900);",
+                  "});",
+                  "pm.test(\"keeps the same refresh token (no rotation)\", () => pm.expect(body.refreshToken).to.be.undefined);",
+                  "pm.collectionVariables.set(\"renewedIdToken\", body.idToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 - the renewed ID token works on /me",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{renewedIdToken}}"
+              }
+            ],
+            "url": "{{apiUrl}}/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "POST /logout",
       "item": [
         {
@@ -778,6 +905,34 @@
                 "exec": [
                   "pm.test(\"is rejected\", () => pm.expect(pm.response.code).to.be.within(400, 499));",
                   "pm.test(\"because it was revoked\", () => pm.expect(pm.response.text()).to.match(/revoked/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 - the API refuses to renew after sign-out",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{apiUrl}}/auth/refresh",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refreshToken\": \"{{refreshToken}}\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"returns 401\", () => pm.response.to.have.status(401));"
                 ]
               }
             }

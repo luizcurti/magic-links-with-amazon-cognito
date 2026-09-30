@@ -50,6 +50,58 @@ describe("ProfilePage", () => {
     expect(session.load()).toBeUndefined();
   });
 
+  it("signs out when the API rejects even a freshly renewed token", async () => {
+    session.save({ ...TOKENS, refreshToken: "refresh-1" });
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "/api/auth/refresh"
+        ? Response.json({ idToken: ID_TOKEN, accessToken: "a2", expiresIn: 900, tokenType: "Bearer" })
+        : Response.json({ message: "Unauthorized" }, { status: 401 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ProfilePage />);
+
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(session.load()).toBeUndefined();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(["/api/me", "/api/auth/refresh", "/api/me"]);
+  });
+
+  it("silently renews an expired session and shows the renewed token's claims", async () => {
+    const renewedIdToken = `${base64url({ alg: "RS256" })}.${base64url({ email: "luiz@example.com", renewed: true })}.sig`;
+    sessionStorage.setItem(
+      "magic-links.session",
+      JSON.stringify({ ...TOKENS, refreshToken: "refresh-1", expiresAt: Date.now() - 1 }),
+    );
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "/api/auth/refresh"
+        ? Response.json({ idToken: renewedIdToken, accessToken: "a2", expiresIn: 900, tokenType: "Bearer" })
+        : Response.json(PROFILE),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ProfilePage />);
+
+    expect(await screen.findByText(/"renewed": true/)).toBeTruthy();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/me",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: renewedIdToken }) }),
+    );
+    expect(window.location.pathname).toBe("/profile");
+  });
+
+  it("goes back to login when the session can no longer be renewed", async () => {
+    sessionStorage.setItem(
+      "magic-links.session",
+      JSON.stringify({ ...TOKENS, refreshToken: "revoked", expiresAt: Date.now() - 1 }),
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ message: "revoked" }, { status: 401 })));
+
+    render(<ProfilePage />);
+
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(session.load()).toBeUndefined();
+  });
+
   it("keeps the session and shows other errors", async () => {
     session.save(TOKENS);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("oops", { status: 502 })));
@@ -57,7 +109,7 @@ describe("ProfilePage", () => {
     render(<ProfilePage />);
 
     expect(await screen.findByText("Request failed with status 502")).toBeTruthy();
-    expect(session.load()).toEqual(TOKENS);
+    expect(session.load()).toMatchObject(TOKENS);
   });
 
   it("shows no claims for a malformed ID token", async () => {

@@ -2,8 +2,8 @@ import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { type DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
 /**
- * One item per email address. Requesting a new link overwrites the previous
- * item, which automatically invalidates any older link for that user.
+ * One item per email address. Issuing a new link (once the cooldown allows it)
+ * overwrites the previous item, which invalidates any older link for that user.
  */
 export interface MagicLinkRecord {
   pk: string;

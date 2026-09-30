@@ -7,6 +7,7 @@ flowchart TB
         LOGIN["λ login"]
         VERIFY["λ auth-callback"]
         ME["λ me"]
+        REFRESH["λ refresh"]
         LOGOUT["λ logout"]
     end
 
@@ -24,12 +25,14 @@ flowchart TB
     FE -- "POST /login" --> WAF
     FE -- "POST /auth/verify" --> WAF
     FE -- "GET /me + JWT" --> WAF
+    FE -- "POST /auth/refresh" --> WAF
     FE -- "POST /logout" --> WAF
     WAF --> APIGW
 
     APIGW --> LOGIN
     APIGW --> VERIFY
     APIGW -- "Cognito authorizer" --> ME
+    APIGW --> REFRESH
     APIGW --> LOGOUT
 
     LOGIN -- "AdminCreateUser" --> Cognito
@@ -37,6 +40,7 @@ flowchart TB
     LOGIN -- "send link" --> SES
 
     VERIFY -- "InitiateAuth /<br/>RespondToAuthChallenge" --> Cognito
+    REFRESH -- "InitiateAuth<br/>REFRESH_TOKEN_AUTH" --> Cognito
     LOGOUT -- "RevokeToken" --> Cognito
     CHECK -- "validate + consume" --> DDB
     KMS -. "encrypts" .-> DDB

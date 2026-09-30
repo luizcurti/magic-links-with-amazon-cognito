@@ -167,11 +167,46 @@ describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () =>
       await expect(refresh(refreshToken)).rejects.toThrow(/revoked/i);
     });
 
-    it("known limit: the ID token keeps working on /me until it expires, even after sign-out", async () => {
+    it("issues ID and access tokens that live 15 minutes", async () => {
+      const { idToken = "", accessToken = "", expiresIn } = await signIn("lifetime");
+      const lifetime = (jwt: string) => {
+        const { exp, iat } = JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString());
+        return exp - iat;
+      };
+
+      expect(Number(expiresIn)).toBe(900);
+      expect(lifetime(idToken)).toBe(900);
+      expect(lifetime(accessToken)).toBe(900);
+    });
+
+    it("renews the session with the refresh token, and the new ID token works on /me", async () => {
+      const { refreshToken = "", idToken = "" } = await signIn("renew");
+
+      const renewed = await post(`${apiUrl}/auth/refresh`, { refreshToken });
+
+      expect(renewed.status).toBe(200);
+      expect(renewed.body.idToken).toBeTruthy();
+      expect(renewed.body.idToken).not.toBe(idToken);
+      expect(renewed.body.refreshToken).toBeUndefined();
+      expect((await fetch(`${apiUrl}/me`, { headers: { Authorization: renewed.body.idToken ?? "" } })).status).toBe(
+        200,
+      );
+    });
+
+    it("after sign-out the session can no longer be renewed", async () => {
+      const { refreshToken = "" } = await signIn("renew-after-logout");
+      await post(`${apiUrl}/logout`, { refreshToken });
+
+      const response = await post(`${apiUrl}/auth/refresh`, { refreshToken });
+      expect(response).toEqual({ status: 401, body: { message: "Session expired or revoked" } });
+    });
+
+    it("known limit: the ID token keeps working on /me until it expires (max 15 min), even after sign-out", async () => {
       const { idToken = "", refreshToken = "" } = await signIn("stateless");
       await post(`${apiUrl}/logout`, { refreshToken });
 
-      // API Gateway checks the JWT signature and expiry, not Cognito revocation.
+      // API Gateway checks the JWT signature and expiry, not Cognito revocation;
+      // short token lifetimes bound this window.
       expect((await fetch(`${apiUrl}/me`, { headers: { Authorization: idToken } })).status).toBe(200);
     });
 
@@ -303,8 +338,13 @@ describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () =>
       ["missing token", {}],
       ["empty token", { refreshToken: "" }],
       ["token that is not a string", { refreshToken: 42 }],
-    ])("rejects a sign-out with a %s with 400", async (_label, body) => {
+    ])("rejects a sign-out or refresh with a %s with 400", async (_label, body) => {
       expect((await post(`${apiUrl}/logout`, body)).status).toBe(400);
+      expect((await post(`${apiUrl}/auth/refresh`, body)).status).toBe(400);
+    });
+
+    it("refuses to renew with a refresh token Cognito never issued", async () => {
+      expect((await post(`${apiUrl}/auth/refresh`, { refreshToken: "forged.refresh.token" })).status).toBe(401);
     });
 
     it("a burst of parallel logins is absorbed without taking the stack down", { timeout: 120_000 }, async () => {
@@ -319,6 +359,7 @@ describe.runIf(ready)("magic link flow (LocalStack)", { timeout: 60_000 }, () =>
     it("unknown routes and methods are not exposed", async () => {
       expect((await fetch(`${apiUrl}/login`)).status).toBe(403);
       expect((await fetch(`${apiUrl}/logout`)).status).toBe(403);
+      expect((await fetch(`${apiUrl}/auth/refresh`)).status).toBe(403);
       expect((await post(`${apiUrl}/admin`, {})).status).toBe(403);
     });
   });

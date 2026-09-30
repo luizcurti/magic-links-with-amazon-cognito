@@ -11,7 +11,8 @@ import { DEFAULT_COOLDOWN_SECONDS, DEFAULT_TTL_SECONDS, MagicLinkService } from 
 
 /**
  * The same response is returned whether or not the email already had an
- * account, so this endpoint cannot be used to enumerate users.
+ * account, and whether or not the cooldown suppressed the email, so this
+ * endpoint cannot be used to enumerate users or probe their activity.
  */
 export const GENERIC_RESPONSE = {
   message: "If the email address is valid, a magic link is on its way.",

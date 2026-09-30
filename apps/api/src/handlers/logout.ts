@@ -3,7 +3,7 @@ import { getCognitoClient } from "../lib/aws-clients.js";
 import { requireEnv } from "../lib/env.js";
 import { errorResponse, noContent, parseJsonBody } from "../lib/http.js";
 import { logger } from "../lib/logger.js";
-import { logoutRequestSchema, validate } from "../lib/validation.js";
+import { refreshTokenRequestSchema, validate } from "../lib/validation.js";
 import { CognitoService } from "../services/cognito.service.js";
 
 /**
@@ -15,7 +15,7 @@ import { CognitoService } from "../services/cognito.service.js";
  */
 export const handler: APIGatewayProxyHandler = async (event) => {
   try {
-    const { refreshToken } = validate(logoutRequestSchema, parseJsonBody(event));
+    const { refreshToken } = validate(refreshTokenRequestSchema, parseJsonBody(event));
 
     const cognito = new CognitoService(
       getCognitoClient(),

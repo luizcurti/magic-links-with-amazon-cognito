@@ -114,3 +114,14 @@ variable "waf_api_rate_limit" {
   type        = number
   default     = 300
 }
+
+variable "token_validity_minutes" {
+  description = "Lifetime of ID and access tokens. Also the longest a token stays usable after sign-out."
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.token_validity_minutes >= 5 && var.token_validity_minutes <= 60
+    error_message = "token_validity_minutes must be between 5 and 60."
+  }
+}

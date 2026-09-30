@@ -20,6 +20,7 @@ import { handler as verifyHandler } from "../../apps/api/src/handlers/auth-callb
 import { GENERIC_RESPONSE, handler as loginHandler } from "../../apps/api/src/handlers/login.js";
 import { handler as logoutHandler } from "../../apps/api/src/handlers/logout.js";
 import { handler as meHandler } from "../../apps/api/src/handlers/me.js";
+import { handler as refreshHandler } from "../../apps/api/src/handlers/refresh.js";
 import { hashToken } from "../../apps/api/src/services/token.service.js";
 
 const cognito = mockClient(CognitoIdentityProviderClient);
@@ -205,6 +206,53 @@ describe("POST /auth/verify", () => {
 
     expect(response.statusCode).toBe(500);
     expect(response.body).not.toContain("DynamoDB");
+  });
+});
+
+describe("POST /auth/refresh", () => {
+  it("returns new short-lived tokens", async () => {
+    cognito.on(InitiateAuthCommand).resolves({
+      AuthenticationResult: { IdToken: "id-2", AccessToken: "access-2", ExpiresIn: 900, TokenType: "Bearer" },
+    });
+
+    const response = await invoke(refreshHandler, request({ refreshToken: "refresh" }));
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({
+      idToken: "id-2",
+      accessToken: "access-2",
+      expiresIn: 900,
+      tokenType: "Bearer",
+    });
+    expect(response.headers?.["Cache-Control"]).toBe("no-store");
+  });
+
+  it("returns 401 once the refresh token is revoked", async () => {
+    cognito
+      .on(InitiateAuthCommand)
+      .rejects(new NotAuthorizedException({ message: "Refresh Token has been revoked", $metadata: {} }));
+
+    const response = await invoke(refreshHandler, request({ refreshToken: "revoked" }));
+
+    expect(response.statusCode).toBe(401);
+    expect(JSON.parse(response.body)).toEqual({ message: "Session expired or revoked" });
+  });
+
+  it("returns 400 without calling Cognito for a missing token", async () => {
+    expect((await invoke(refreshHandler, request({}))).statusCode).toBe(400);
+    expect(cognito.commandCalls(InitiateAuthCommand)).toHaveLength(0);
+  });
+
+  it("returns 429 when Cognito throttles", async () => {
+    cognito.on(InitiateAuthCommand).rejects(new TooManyRequestsException({ message: "slow down", $metadata: {} }));
+    expect((await invoke(refreshHandler, request({ refreshToken: "refresh" }))).statusCode).toBe(429);
+  });
+
+  it("returns 500 without leaking internals on other failures", async () => {
+    cognito.on(InitiateAuthCommand).rejects(new Error("InternalErrorException: cognito exploded"));
+    const response = await invoke(refreshHandler, request({ refreshToken: "refresh" }));
+    expect(response.statusCode).toBe(500);
+    expect(response.body).not.toContain("exploded");
   });
 });
 

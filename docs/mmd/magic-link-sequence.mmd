@@ -38,6 +38,12 @@ sequenceDiagram
     FE->>API: GET /me (Authorization: ID token)
     API-->>FE: 200 {sub, email}
 
+    Note over FE,C: ID and access tokens live 15 minutes
+    FE->>API: POST /auth/refresh {refreshToken} (token expiring, or /me answered 401)
+    API->>C: InitiateAuth(REFRESH_TOKEN_AUTH)
+    C-->>API: new ID / access tokens
+    API-->>FE: 200 (401 once the refresh token is revoked → back to login)
+
     U->>FE: clicks "Sign out"
     FE->>API: POST /logout {refreshToken}
     API->>C: RevokeToken

@@ -35,7 +35,7 @@ resource "aws_cognito_user_pool_client" "web" {
   name         = "${local.name}-web"
   user_pool_id = aws_cognito_user_pool.main.id
 
-  # Public client (browser / API Lambda): no secret, only custom auth.
+  # Public client (API Lambdas): no secret, only custom auth and token refresh.
   generate_secret = false
   explicit_auth_flows = [
     "ALLOW_CUSTOM_AUTH",
@@ -46,8 +46,11 @@ resource "aws_cognito_user_pool_client" "web" {
   prevent_user_existence_errors = "ENABLED"
   enable_token_revocation       = true
 
-  access_token_validity  = 60
-  id_token_validity      = 60
+  # Short-lived on purpose: API Gateway can't see revocations, so after sign-out
+  # an ID token stays usable until it expires. The frontend renews them
+  # silently through POST /auth/refresh.
+  access_token_validity  = var.token_validity_minutes
+  id_token_validity      = var.token_validity_minutes
   refresh_token_validity = 30
 
   token_validity_units {

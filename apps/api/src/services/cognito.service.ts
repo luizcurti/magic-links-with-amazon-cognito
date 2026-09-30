@@ -3,6 +3,7 @@ import {
   AdminCreateUserCommand,
   AdminGetUserCommand,
   AdminSetUserPasswordCommand,
+  type AuthenticationResultType,
   type CognitoIdentityProviderClient,
   InitiateAuthCommand,
   NotAuthorizedException,
@@ -22,7 +23,7 @@ export interface AuthTokens {
   tokenType: string;
 }
 
-/** Thrown when Cognito rejects the magic link. Mapped to HTTP 401. */
+/** Thrown when Cognito rejects a magic link or a refresh token. Mapped to HTTP 401. */
 export class AuthenticationError extends Error {
   constructor(message = "Invalid or expired magic link") {
     super(message);
@@ -94,7 +95,7 @@ export class CognitoService {
    * signing out with it succeeds too.
    *
    * ID tokens are verified by API Gateway without asking Cognito, so they stay
-   * valid until they expire (60 minutes).
+   * valid until they expire (15 minutes by default, see token_validity_minutes).
    *
    * @returns false when Cognito did not recognise the token.
    */
@@ -146,19 +147,8 @@ export class CognitoService {
         }),
       );
 
-      const result = response.AuthenticationResult;
-      if (!result?.IdToken || !result.AccessToken) {
-        // Cognito answers a wrong response with a new challenge, not an error.
-        throw new AuthenticationError();
-      }
-
-      return {
-        idToken: result.IdToken,
-        accessToken: result.AccessToken,
-        refreshToken: result.RefreshToken,
-        expiresIn: result.ExpiresIn ?? 3600,
-        tokenType: result.TokenType ?? "Bearer",
-      };
+      // Cognito answers a wrong response with a new challenge, not an error.
+      return toAuthTokens(response.AuthenticationResult, new AuthenticationError());
     } catch (error) {
       if (error instanceof NotAuthorizedException || error instanceof UserNotFoundException) {
         throw new AuthenticationError();
@@ -166,6 +156,39 @@ export class CognitoService {
       throw error;
     }
   }
+
+  /**
+   * Exchanges a refresh token for new ID and access tokens. Cognito rejects
+   * revoked, expired and unknown refresh tokens with NotAuthorizedException.
+   * No new refresh token is issued: the client keeps the one it has.
+   */
+  async refreshSession(refreshToken: string): Promise<AuthTokens> {
+    const expired = new AuthenticationError("Session expired or revoked");
+    try {
+      const response = await this.client.send(
+        new InitiateAuthCommand({
+          AuthFlow: "REFRESH_TOKEN_AUTH",
+          ClientId: this.clientId,
+          AuthParameters: { REFRESH_TOKEN: refreshToken },
+        }),
+      );
+      return toAuthTokens(response.AuthenticationResult, expired);
+    } catch (error) {
+      if (error instanceof NotAuthorizedException) throw expired;
+      throw error;
+    }
+  }
+}
+
+function toAuthTokens(result: AuthenticationResultType | undefined, missing: AuthenticationError): AuthTokens {
+  if (!result?.IdToken || !result.AccessToken) throw missing;
+  return {
+    idToken: result.IdToken,
+    accessToken: result.AccessToken,
+    refreshToken: result.RefreshToken,
+    expiresIn: result.ExpiresIn ?? 3600,
+    tokenType: result.TokenType ?? "Bearer",
+  };
 }
 
 /** 32 random bytes plus one character of each class, to satisfy any password policy. */

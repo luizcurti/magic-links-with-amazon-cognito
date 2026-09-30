@@ -19,8 +19,8 @@ export const verifyRequestSchema = z.object({
   token: z.string({ error: "token is required" }).regex(TOKEN_PATTERN, { error: "token has an invalid format" }),
 });
 
-/** Cognito refresh tokens are encrypted JWTs of roughly 1.7 KB. */
-export const logoutRequestSchema = z.object({
+/** Body of /auth/refresh and /logout. Cognito refresh tokens are encrypted JWTs of roughly 1.7 KB. */
+export const refreshTokenRequestSchema = z.object({
   refreshToken: z
     .string({ error: "refreshToken is required" })
     .min(1, { error: "refreshToken is required" })
