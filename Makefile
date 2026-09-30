@@ -91,7 +91,7 @@ check: lint typecheck test ## Lint, typecheck, unit tests and Terraform validati
 	$(TF) fmt -check -recursive
 	$(TF) validate
 
-aws-infra: build ## Deploy to a REAL AWS account (Terraform workspace "aws"; costs money, see README)
+aws-infra: build ## Deploy to a REAL AWS account (Terraform workspace "aws"; costs money, see docs/deployment.md)
 	$(TF) init -input=false -upgrade=false
 	@$(TF) workspace new aws >/dev/null 2>&1 && $(TF) workspace select default >/dev/null || true
 	TF_WORKSPACE=aws $(TF) apply -input=false -var target=aws $(AWS_TF_VARS)
