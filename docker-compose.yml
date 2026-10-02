@@ -1,0 +1,54 @@
+services:
+  localstack:
+    container_name: magic-links-localstack
+    # Requires an auth token on a plan that includes Cognito.
+    image: ${LOCALSTACK_IMAGE:-localstack/localstack:2026.08}
+    ports:
+      - "127.0.0.1:4566:4566"            # LocalStack edge endpoint
+      - "127.0.0.1:4510-4559:4510-4559"  # external service ports
+    environment:
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?Set LOCALSTACK_AUTH_TOKEN in .env (see .env.example)}
+      SERVICES: apigateway,cloudwatch,cognito-idp,dynamodb,iam,kms,lambda,logs,ses,sns,sqs,sts,wafv2
+      AWS_DEFAULT_REGION: us-east-1
+      # Lambdas run as sibling containers on this Docker daemon.
+      LAMBDA_DOCKER_NETWORK: magic-links
+      # Caps concurrent Lambda containers, like an account quota.
+      LAMBDA_LIMITS_CONCURRENT_EXECUTIONS: ${LAMBDA_CONCURRENCY:-20}
+      LAMBDA_LIMITS_MINIMUM_UNRESERVED_CONCURRENCY: ${LAMBDA_CONCURRENCY:-20}
+      DEBUG: ${LOCALSTACK_DEBUG:-0}
+    volumes:
+      - localstack-data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - magic-links
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  # Production frontend (nginx): make frontend-docker.
+  frontend:
+    profiles: ["frontend"]
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    image: magic-links-frontend:local
+    container_name: magic-links-frontend
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8088}:8080"
+    environment:
+      API_PROXY_TARGET: ${API_PROXY_TARGET:-http://localstack:4566}
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - magic-links
+
+networks:
+  magic-links:
+    name: magic-links
+
+volumes:
+  localstack-data:

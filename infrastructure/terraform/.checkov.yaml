@@ -1,0 +1,24 @@
+# Skipped checks, each with its reason.
+compact: true
+quiet: true
+framework:
+  - terraform
+skip-check:
+  # Lambda
+  - CKV_AWS_116 # DLQ: invocations are synchronous; the SQS queue has its own DLQ.
+  - CKV_AWS_117 # VPC: the functions only call public AWS APIs.
+  - CKV_AWS_115 # Reserved concurrency: bounded by API throttling, the WAF and the worker's maximum_concurrency.
+  - CKV_AWS_173 # Env var CMK: environment variables hold no secrets.
+  - CKV_AWS_272 # Code signing: requires AWS Signer profiles.
+  # API Gateway
+  - CKV2_AWS_77 # Requires AnonymousIpList, which blocks VPN users; KnownBadInputs (Log4j) is enabled.
+  - CKV2_AWS_51 # Client certificates: the clients are browsers.
+  - CKV_AWS_59 # Open access: /login and /auth/verify are public by design.
+  - CKV2_AWS_53 # Request validators: bodies are validated with Zod in the Lambdas.
+  - CKV_AWS_120 # Stage caching: responses are per-user.
+  - CKV_AWS_225 # Method caching: responses are per-user.
+  - CKV_AWS_237 # create_before_destroy: set on the deployment; the REST API is never replaced.
+  # Logs & KMS
+  - CKV_AWS_158 # Log group CMK: logs hold no tokens, only masked emails.
+  - CKV_AWS_338 # 1-year retention: retention is a variable (default 14 days).
+  - CKV2_AWS_64 # KMS key policy: delegates to IAM; roles are scoped with kms:ViaService.

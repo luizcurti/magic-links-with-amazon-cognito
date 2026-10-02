@@ -1,0 +1,57 @@
+flowchart TB
+    FE["Frontend<br/>React + Vite"]
+    WAF["AWS WAF<br/>per-IP rate limits · managed rules"]
+    APIGW["API Gateway (REST)<br/>per-route throttling · JSON access logs · X-Ray"]
+
+    subgraph Lambdas
+        LOGIN["λ login"]
+        VERIFY["λ auth-callback"]
+        ME["λ me"]
+        REFRESH["λ refresh"]
+        LOGOUT["λ logout"]
+    end
+
+    subgraph Cognito["Cognito User Pool · CUSTOM_AUTH"]
+        DEFINE["λ DefineAuthChallenge"]
+        CREATE["λ CreateAuthChallenge"]
+        CHECK["λ VerifyAuthChallengeResponse"]
+    end
+
+    Q[["SQS login-requests<br/>+ dead-letter queue"]]
+    WORKER["λ send-magic-link"]
+    DDB[("DynamoDB<br/>tokenHash · expiresAt · used")]
+    KMS["KMS<br/>CMK"]
+    SES["SES<br/>(captured locally)"]
+    CW["CloudWatch Logs<br/>14-day retention<br/>correlated by trace / request ID"]
+    ALARMS["CloudWatch alarms<br/>Lambda errors · throttles · duration<br/>API 5xx · 4xx rate · DLQ depth"]
+    SNS["SNS topic<br/>(optional email)"]
+
+    FE -- "POST /login" --> WAF
+    FE -- "POST /auth/verify" --> WAF
+    FE -- "GET /me + JWT" --> WAF
+    FE -- "POST /auth/refresh" --> WAF
+    FE -- "POST /logout" --> WAF
+    WAF --> APIGW
+
+    APIGW --> LOGIN
+    APIGW --> VERIFY
+    APIGW -- "Cognito authorizer" --> ME
+    APIGW --> REFRESH
+    APIGW --> LOGOUT
+
+    LOGIN -- "enqueue {email}" --> Q
+    Q --> WORKER
+    WORKER -- "save hash<br/>(cooldown)" --> DDB
+    WORKER -- "send link" --> SES
+
+    VERIFY -- "check link<br/>(read-only)" --> DDB
+    VERIFY -- "AdminCreateUser (first sign-in),<br/>InitiateAuth / RespondToAuthChallenge" --> Cognito
+    REFRESH -- "InitiateAuth<br/>REFRESH_TOKEN_AUTH" --> Cognito
+    LOGOUT -- "RevokeToken" --> Cognito
+    CHECK -- "validate + consume" --> DDB
+    KMS -. "encrypts" .-> DDB
+    Lambdas -. "logs" .-> CW
+    APIGW -. "access logs" .-> CW
+    WAF -. "WAF logs" .-> CW
+    CW ~~~ ALARMS
+    ALARMS -- "notify" --> SNS

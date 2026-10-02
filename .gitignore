@@ -1,0 +1,26 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+*.log
+.DS_Store
+
+# Terraform
+infrastructure/terraform/.terraform/
+infrastructure/terraform/.build/
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.*
+infrastructure/terraform/.terraform.tfstate.lock.info
+
+# Frontend
+apps/frontend/dist/
+
+# Local tool settings
+claude/
+.claude/settings.local.json
+
+# Playwright
+test-results/
+playwright-report/
+tfplan*

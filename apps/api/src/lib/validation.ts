@@ -1,0 +1,44 @@
+import { z } from "zod";
+import { TOKEN_PATTERN } from "../services/token.service.js";
+import { BadRequestError } from "./http.js";
+
+/** Trimmed and lower-cased: one user and one record per address. */
+export const emailSchema = z
+  .string({ error: "email is required" })
+  .trim()
+  .toLowerCase()
+  .max(254, { error: "email is too long" })
+  .pipe(z.email({ error: "email must be a valid email address" }));
+
+export const loginRequestSchema = z.object({
+  email: emailSchema,
+});
+
+/** A POST /login request as queued for the worker. */
+export const queuedLoginRequestSchema = loginRequestSchema.extend({
+  requestedAt: z.number().int().positive().optional(),
+});
+
+export const verifyRequestSchema = z.object({
+  email: emailSchema,
+  token: z.string({ error: "token is required" }).regex(TOKEN_PATTERN, { error: "token has an invalid format" }),
+});
+
+/** Body of /auth/refresh and /logout (Cognito refresh tokens are ~1.7 KB). */
+export const refreshTokenRequestSchema = z.object({
+  refreshToken: z
+    .string({ error: "refreshToken is required" })
+    .min(1, { error: "refreshToken is required" })
+    .max(8192, { error: "refreshToken is too long" }),
+});
+
+export function validate<T>(schema: z.ZodType<T>, input: unknown): T {
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    throw new BadRequestError(
+      "Invalid request",
+      result.error.issues.map((issue) => ({ field: issue.path.join("."), message: issue.message })),
+    );
+  }
+  return result.data;
+}

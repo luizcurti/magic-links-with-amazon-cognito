@@ -1,0 +1,190 @@
+variable "project_name" {
+  description = "Prefix used to name every resource."
+  type        = string
+  default     = "magic-links"
+}
+
+variable "target" {
+  description = "Where to deploy: \"localstack\" (default) or \"aws\" (a real account, default credential chain)."
+  type        = string
+  default     = "localstack"
+
+  validation {
+    condition     = contains(["localstack", "aws"], var.target)
+    error_message = "target must be \"localstack\" or \"aws\"."
+  }
+}
+
+variable "localstack_cognito_issuer_base" {
+  description = "Prefix of the `iss` claim in tokens issued by LocalStack Cognito (followed by /<pool id>)."
+  type        = string
+  default     = "http://localhost.localstack.cloud:4566"
+}
+
+variable "region" {
+  description = "AWS region."
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "localstack_endpoint" {
+  description = "LocalStack endpoint (target = localstack)."
+  type        = string
+  default     = "http://localhost:4566"
+}
+
+variable "stage_name" {
+  description = "API Gateway stage name."
+  type        = string
+  default     = "local"
+}
+
+variable "ses_from_address" {
+  description = "Sender address for magic-link emails (verified in SES)."
+  type        = string
+  default     = "no-reply@magic-links.local"
+}
+
+variable "magic_link_callback_url" {
+  description = "Frontend route the magic link points to."
+  type        = string
+  default     = "http://localhost:5173/auth/callback"
+}
+
+variable "frontend_origin" {
+  description = "Origin allowed by CORS."
+  type        = string
+  default     = "http://localhost:5173"
+}
+
+variable "magic_link_ttl_seconds" {
+  description = "How long a magic link stays valid."
+  type        = number
+  default     = 600
+
+  validation {
+    condition     = var.magic_link_ttl_seconds >= 60 && var.magic_link_ttl_seconds <= 3600
+    error_message = "magic_link_ttl_seconds must be between 60 and 3600."
+  }
+}
+
+variable "lambda_runtime" {
+  description = "Node.js runtime for every Lambda."
+  type        = string
+  default     = "nodejs22.x"
+}
+
+variable "lambda_dist_dir" {
+  description = "Folder with the esbuild output (npm run build)."
+  type        = string
+  default     = "../../dist"
+}
+
+variable "log_retention_days" {
+  description = "Retention for Lambda and API Gateway access logs."
+  type        = number
+  default     = 14
+}
+
+variable "api_throttle_rate_limit" {
+  description = "Steady-state requests per second allowed on each API method (except POST /login)."
+  type        = number
+  default     = 100
+}
+
+variable "api_throttle_burst_limit" {
+  description = "Maximum concurrent request burst allowed on each API method (except POST /login)."
+  type        = number
+  default     = 200
+}
+
+variable "login_throttle_rate_limit" {
+  description = "Steady-state requests per second allowed on POST /login."
+  type        = number
+  default     = 20
+}
+
+variable "login_throttle_burst_limit" {
+  description = "Maximum concurrent request burst allowed on POST /login."
+  type        = number
+  default     = 40
+}
+
+variable "send_magic_link_max_concurrency" {
+  description = "Maximum concurrent send-magic-link workers, to stay under the SES sending rate (minimum 2)."
+  type        = number
+  default     = 5
+}
+
+variable "magic_link_cooldown_seconds" {
+  description = "Minimum time between two magic links for one email; doubles with each unused link."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.magic_link_cooldown_seconds >= 1 && var.magic_link_cooldown_seconds <= 3600
+    error_message = "magic_link_cooldown_seconds must be between 1 and 3600."
+  }
+}
+
+variable "magic_link_max_cooldown_seconds" {
+  description = "Ceiling of the per-email cooldown."
+  type        = number
+  default     = 900
+
+  validation {
+    condition     = var.magic_link_max_cooldown_seconds >= 60 && var.magic_link_max_cooldown_seconds <= 3600
+    error_message = "magic_link_max_cooldown_seconds must be between 60 and 3600."
+  }
+}
+
+variable "waf_rate_window_seconds" {
+  description = "Window over which the WAF counts requests per IP."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = contains([60, 120, 300, 600], var.waf_rate_window_seconds)
+    error_message = "waf_rate_window_seconds must be 60, 120, 300 or 600."
+  }
+}
+
+variable "waf_login_rate_limit" {
+  description = "Maximum POST /login requests per IP within the WAF window."
+  type        = number
+  default     = 10
+}
+
+variable "waf_api_rate_limit" {
+  description = "Maximum requests per IP to the whole API within the WAF window."
+  type        = number
+  default     = 300
+}
+
+variable "token_validity_minutes" {
+  description = "Lifetime of ID and access tokens, which stay usable after sign-out until they expire."
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.token_validity_minutes >= 5 && var.token_validity_minutes <= 60
+    error_message = "token_validity_minutes must be between 5 and 60."
+  }
+}
+
+variable "alarm_email" {
+  description = "Email subscribed to the alarm topic (the subscription must be confirmed). null: no subscription."
+  type        = string
+  default     = null
+}
+
+variable "api_4xx_rate_threshold" {
+  description = "Share of 4xx API responses (0-1) over 15 minutes that raises an alarm."
+  type        = number
+  default     = 0.5
+
+  validation {
+    condition     = var.api_4xx_rate_threshold > 0 && var.api_4xx_rate_threshold <= 1
+    error_message = "api_4xx_rate_threshold must be in (0, 1]."
+  }
+}

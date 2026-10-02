@@ -1,0 +1,206 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1260 720" width="1260" height="720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>Magic Links with Amazon Cognito: AWS architecture</title>
+  <defs>
+    <marker id="a-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+    <marker id="a-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#059669"/></marker>
+    <marker id="a-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/></marker>
+    <marker id="a-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/></marker>
+  </defs>
+
+  <rect width="1260" height="720" fill="#ffffff"/>
+
+  <!-- Title & legend -->
+  <text x="30" y="42" font-size="22" font-weight="700" fill="#111827">Magic Links with Amazon Cognito — AWS architecture</text>
+  <text x="30" y="66" font-size="13" fill="#4b5563">Passwordless sign-in: request a link, click it, get 15-minute Cognito JWTs. Runs locally on LocalStack (Docker Compose), provisioned with Terraform.</text>
+  <g font-size="12" font-weight="600">
+    <circle cx="36" cy="92" r="8" fill="#2563eb"/><text x="32" y="96" fill="#fff" font-size="10">A</text>
+    <text x="50" y="96" fill="#2563eb">Request a link (POST /login)</text>
+    <circle cx="256" cy="92" r="8" fill="#059669"/><text x="252" y="96" fill="#fff" font-size="10">B</text>
+    <text x="270" y="96" fill="#059669">Exchange the link for JWTs (POST /auth/verify)</text>
+    <circle cx="586" cy="92" r="8" fill="#7c3aed"/><text x="582" y="96" fill="#fff" font-size="10">C</text>
+    <text x="600" y="96" fill="#7c3aed">Call a protected route (GET /me)</text>
+    <circle cx="836" cy="92" r="8" fill="#6b7280"/><text x="832" y="96" fill="#fff" font-size="10">D</text>
+    <text x="850" y="96" fill="#6b7280">Session: renew (POST /auth/refresh) · sign out (POST /logout)</text>
+  </g>
+
+  <!-- AWS / LocalStack boundary -->
+  <rect x="260" y="118" width="980" height="582" rx="12" fill="#f9fafb" stroke="#9ca3af" stroke-dasharray="6 4"/>
+  <text x="276" y="138" font-size="12" font-weight="600" fill="#6b7280">AWS · emulated by LocalStack · provisioned with Terraform</text>
+
+  <!-- Outside: inbox & browser -->
+  <rect x="30" y="160" width="160" height="76" rx="8" fill="#fff" stroke="#6b7280"/>
+  <text x="44" y="186" font-size="14" font-weight="700" fill="#111827">Email inbox</text>
+  <text x="44" y="206" font-size="12" fill="#4b5563">link: /auth/callback</text>
+  <text x="44" y="222" font-size="12" fill="#4b5563">#email=…&amp;token=… (fragment)</text>
+
+  <rect x="30" y="345" width="160" height="110" rx="8" fill="#fff" stroke="#6b7280"/>
+  <text x="44" y="371" font-size="14" font-weight="700" fill="#111827">Browser</text>
+  <text x="44" y="391" font-size="12" fill="#4b5563">React + Vite SPA</text>
+  <text x="44" y="407" font-size="12" fill="#4b5563">/login · /auth/callback</text>
+  <text x="44" y="423" font-size="12" fill="#4b5563">/profile</text>
+  <text x="44" y="443" font-size="11" fill="#6b7280">asks “Sign in as …?” first</text>
+
+  <!-- SES -->
+  <rect x="290" y="160" width="190" height="76" rx="8" fill="#fff" stroke="#0f766e" stroke-width="1.5"/>
+  <rect x="290" y="160" width="190" height="20" rx="8" fill="#0f766e"/><rect x="290" y="172" width="190" height="8" fill="#0f766e"/>
+  <text x="302" y="175" font-size="10" font-weight="700" fill="#fff">AMAZON SES</text>
+  <text x="302" y="202" font-size="14" font-weight="700" fill="#111827">Magic-link email</text>
+  <text x="302" y="222" font-size="12" fill="#4b5563">captured at /_aws/ses</text>
+
+  <!-- WAF in front of API Gateway -->
+  <rect x="290" y="258" width="190" height="34" rx="6" fill="#fef2f2" stroke="#b91c1c" stroke-width="1.5"/>
+  <text x="302" y="272" font-size="10" font-weight="700" fill="#b91c1c">AWS WAF</text>
+  <text x="302" y="286" font-size="11" fill="#4b5563">per-IP rate limits · managed rules</text>
+
+  <!-- API Gateway -->
+  <rect x="290" y="300" width="190" height="200" rx="8" fill="#fff" stroke="#be185d" stroke-width="1.5"/>
+  <rect x="290" y="300" width="190" height="20" rx="8" fill="#be185d"/><rect x="290" y="312" width="190" height="8" fill="#be185d"/>
+  <text x="302" y="315" font-size="10" font-weight="700" fill="#fff">AMAZON API GATEWAY</text>
+  <text x="302" y="342" font-size="14" font-weight="700" fill="#111827">REST API</text>
+  <text x="302" y="364" font-size="12" fill="#4b5563">POST /login</text>
+  <text x="302" y="382" font-size="12" fill="#4b5563">POST /auth/verify</text>
+  <text x="302" y="400" font-size="12" fill="#4b5563">GET /me</text>
+  <text x="314" y="418" font-size="12" fill="#4b5563">↳ Cognito authorizer</text>
+  <text x="302" y="436" font-size="12" fill="#4b5563">POST /auth/refresh · /logout</text>
+  <text x="302" y="466" font-size="11" fill="#6b7280">Per-route throttling · JSON only</text>
+  <text x="302" y="482" font-size="11" fill="#6b7280">JSON access logs · X-Ray</text>
+
+  <!-- Lambdas -->
+  <g>
+    <rect x="540" y="150" width="190" height="56" rx="8" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="540" y="150" width="190" height="18" rx="8" fill="#d97706"/><rect x="540" y="160" width="190" height="8" fill="#d97706"/>
+    <text x="552" y="163" font-size="10" font-weight="700" fill="#fff">AWS LAMBDA</text>
+    <text x="552" y="185" font-size="14" font-weight="700" fill="#111827">λ login</text>
+    <text x="552" y="200" font-size="11" fill="#4b5563">only queues the request</text>
+
+    <rect x="540" y="216" width="190" height="46" rx="8" fill="#fff" stroke="#c2410c" stroke-width="1.5"/>
+    <rect x="540" y="216" width="190" height="18" rx="8" fill="#c2410c"/><rect x="540" y="226" width="190" height="8" fill="#c2410c"/>
+    <text x="552" y="229" font-size="10" font-weight="700" fill="#fff">AMAZON SQS</text>
+    <text x="552" y="252" font-size="12" font-weight="700" fill="#111827">login-requests + DLQ</text>
+
+    <rect x="540" y="272" width="190" height="66" rx="8" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="540" y="272" width="190" height="18" rx="8" fill="#d97706"/><rect x="540" y="282" width="190" height="8" fill="#d97706"/>
+    <text x="552" y="285" font-size="10" font-weight="700" fill="#fff">AWS LAMBDA</text>
+    <text x="552" y="307" font-size="14" font-weight="700" fill="#111827">λ send-magic-link</text>
+    <text x="552" y="324" font-size="11" fill="#4b5563">cooldown · store hash · email</text>
+
+    <rect x="540" y="352" width="190" height="76" rx="8" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="540" y="352" width="190" height="20" rx="8" fill="#d97706"/><rect x="540" y="364" width="190" height="8" fill="#d97706"/>
+    <text x="552" y="367" font-size="10" font-weight="700" fill="#fff">AWS LAMBDA</text>
+    <text x="552" y="394" font-size="14" font-weight="700" fill="#111827">λ auth-callback</text>
+    <text x="552" y="414" font-size="12" fill="#4b5563">checks link · CUSTOM_AUTH</text>
+
+    <rect x="540" y="540" width="190" height="76" rx="8" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="540" y="540" width="190" height="20" rx="8" fill="#d97706"/><rect x="540" y="552" width="190" height="8" fill="#d97706"/>
+    <text x="552" y="555" font-size="10" font-weight="700" fill="#fff">AWS LAMBDA</text>
+    <text x="552" y="582" font-size="14" font-weight="700" fill="#111827">λ me</text>
+    <text x="552" y="602" font-size="12" fill="#4b5563">re-verifies the JWT</text>
+  </g>
+
+  <g>
+    <rect x="540" y="444" width="190" height="62" rx="8" fill="#fff" stroke="#d97706" stroke-width="1.5"/>
+    <rect x="540" y="444" width="190" height="20" rx="8" fill="#d97706"/><rect x="540" y="456" width="190" height="8" fill="#d97706"/>
+    <text x="552" y="459" font-size="10" font-weight="700" fill="#fff">AWS LAMBDA ×2</text>
+    <text x="552" y="484" font-size="14" font-weight="700" fill="#111827">λ refresh · λ logout</text>
+    <text x="552" y="500" font-size="12" fill="#4b5563">renew / revoke session</text>
+  </g>
+
+  <!-- Cognito -->
+  <rect x="880" y="160" width="340" height="286" rx="10" fill="#fff5f5" stroke="#dc2626" stroke-width="1.5"/>
+  <rect x="880" y="160" width="340" height="20" rx="10" fill="#dc2626"/><rect x="880" y="172" width="340" height="8" fill="#dc2626"/>
+  <text x="892" y="175" font-size="10" font-weight="700" fill="#fff">AMAZON COGNITO USER POOL · CUSTOM_AUTH</text>
+  <text x="892" y="202" font-size="12" fill="#4b5563">Issues ID / access / refresh JWTs</text>
+  <g font-size="13" font-weight="700" fill="#111827">
+    <rect x="906" y="218" width="290" height="58" rx="6" fill="#fff" stroke="#d97706"/>
+    <text x="920" y="242">λ DefineAuthChallenge</text>
+    <text x="920" y="262" font-size="11" font-weight="400" fill="#4b5563">max 3 attempts · decoy for unknown users</text>
+    <rect x="906" y="290" width="290" height="58" rx="6" fill="#fff" stroke="#d97706"/>
+    <text x="920" y="314">λ CreateAuthChallenge</text>
+    <text x="920" y="334" font-size="11" font-weight="400" fill="#4b5563">MAGIC_LINK challenge, no secrets</text>
+    <rect x="906" y="362" width="290" height="58" rx="6" fill="#fff" stroke="#d97706"/>
+    <text x="920" y="386">λ VerifyAuthChallengeResponse</text>
+    <text x="920" y="406" font-size="11" font-weight="400" fill="#4b5563">hash · email · expiry · single use</text>
+  </g>
+
+  <!-- DynamoDB & KMS -->
+  <rect x="880" y="500" width="220" height="90" rx="8" fill="#fff" stroke="#4338ca" stroke-width="1.5"/>
+  <rect x="880" y="500" width="220" height="20" rx="8" fill="#4338ca"/><rect x="880" y="512" width="220" height="8" fill="#4338ca"/>
+  <text x="892" y="515" font-size="10" font-weight="700" fill="#fff">AMAZON DYNAMODB</text>
+  <text x="892" y="542" font-size="14" font-weight="700" fill="#111827">magic-links-tokens</text>
+  <text x="892" y="562" font-size="12" fill="#4b5563">sha256(token) · expiresAt · used</text>
+  <text x="892" y="578" font-size="12" fill="#4b5563">streak · purgeAt (TTL)</text>
+
+  <rect x="1130" y="500" width="90" height="90" rx="8" fill="#fff" stroke="#854d0e" stroke-width="1.5"/>
+  <rect x="1130" y="500" width="90" height="20" rx="8" fill="#854d0e"/><rect x="1130" y="512" width="90" height="8" fill="#854d0e"/>
+  <text x="1142" y="515" font-size="10" font-weight="700" fill="#fff">AWS KMS</text>
+  <text x="1142" y="545" font-size="14" font-weight="700" fill="#111827">CMK</text>
+  <text x="1142" y="565" font-size="11" fill="#4b5563">encrypts</text>
+  <text x="1142" y="579" font-size="11" fill="#4b5563">the table</text>
+
+  <!-- Observability -->
+  <rect x="290" y="636" width="930" height="56" rx="8" fill="#fff" stroke="#6b7280"/>
+  <text x="304" y="658" font-size="12" fill="#374151"><tspan font-weight="700">Amazon CloudWatch Logs</tspan> (Lambda, API access and WAF logs, 14-day retention, correlated by X-Ray trace and request IDs) · <tspan font-weight="700">AWS X-Ray</tspan> tracing</text>
+  <text x="304" y="678" font-size="12" fill="#374151"><tspan font-weight="700">CloudWatch alarms → Amazon SNS</tspan> (Lambda errors · throttles · duration, API 5xx · 4xx rate, DLQ depth) · one least-privilege <tspan font-weight="700">IAM</tspan> role per Lambda</text>
+
+  <!-- A: request a link (blue) -->
+  <g fill="none" stroke="#2563eb" stroke-width="2">
+    <path d="M190 375 H288" marker-end="url(#a-blue)"/>
+    <path d="M480 330 H500 V178 H538" marker-end="url(#a-blue)"/>
+    <path d="M635 206 V214" marker-end="url(#a-blue)"/>
+    <path d="M635 262 V270" marker-end="url(#a-blue)"/>
+    <path d="M730 306 H860 V530 H878" marker-end="url(#a-blue)"/>
+    <path d="M540 322 H520 V218 H482" marker-end="url(#a-blue)"/>
+    <path d="M290 198 H192" marker-end="url(#a-blue)"/>
+  </g>
+  <g font-size="11" fill="#2563eb" font-weight="600">
+    <text x="198" y="369">A1 /login</text>
+    <text x="740" y="246">A2 queue → worker</text>
+    <text x="854" y="468" transform="rotate(-90 854 468)">A3 put hash</text>
+    <text x="738" y="340">A4 send email (SES) ←</text>
+    <text x="214" y="190">A5 email</text>
+  </g>
+
+  <!-- B: exchange the link (green) -->
+  <g fill="none" stroke="#059669" stroke-width="2">
+    <path d="M110 236 V343" stroke-dasharray="5 4" marker-end="url(#a-green)"/>
+    <path d="M190 405 H288" marker-end="url(#a-green)"/>
+    <path d="M480 390 H538" marker-end="url(#a-green)"/>
+    <path d="M730 390 H878" marker-end="url(#a-green)"/>
+    <path d="M730 416 H842 V575 H878" marker-end="url(#a-green)"/>
+    <path d="M1050 420 V498" marker-end="url(#a-green)"/>
+  </g>
+  <g font-size="11" fill="#059669" font-weight="600">
+    <text x="118" y="296">B1 click link</text>
+    <text x="198" y="399">B2 /auth/verify</text>
+    <text x="736" y="384">B4 create user (1st) +</text>
+    <text x="736" y="370">B3 check link ↓</text>
+    <text x="736" y="408">CUSTOM_AUTH</text>
+    <text x="1058" y="466">B5 get + conditional</text>
+    <text x="1058" y="480">update used=true</text>
+  </g>
+
+  <!-- C: protected route (purple) -->
+  <g fill="none" stroke="#7c3aed" stroke-width="2">
+    <path d="M190 435 H288" marker-end="url(#a-purple)"/>
+    <path d="M480 480 H510 V578 H538" marker-end="url(#a-purple)"/>
+  </g>
+  <g font-size="11" fill="#7c3aed" font-weight="600">
+    <text x="198" y="429">C1 /me + JWT</text>
+    <text x="738" y="572">C2 verified</text>
+    <text x="738" y="586">claims only</text>
+  </g>
+
+  <!-- D: sign out (gray) -->
+  <g fill="none" stroke="#6b7280" stroke-width="2">
+    <path d="M190 448 H288" stroke-dasharray="5 4" marker-end="url(#a-gray)"/>
+    <path d="M480 476 H538" marker-end="url(#a-gray)"/>
+    <path d="M730 490 H1000 V448" marker-end="url(#a-gray)"/>
+  </g>
+  <g font-size="11" fill="#6b7280" font-weight="600">
+    <text x="198" y="462">D1 session</text>
+    <text x="872" y="484">D2 refresh · revoke</text>
+  </g>
+
+  <!-- KMS -> DynamoDB -->
+  <path d="M1130 545 H1102" fill="none" stroke="#854d0e" stroke-width="1.5" stroke-dasharray="3 3"/>
+</svg>

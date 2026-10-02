@@ -1,0 +1,68 @@
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant FE as Frontend
+    participant API as API Gateway + Lambdas
+    participant Q as SQS
+    participant W as send-magic-link worker
+    participant DB as DynamoDB
+    participant SES as SES
+    participant C as Cognito
+    participant T as Auth triggers
+
+    U->>FE: enters email
+    FE->>API: POST /login {email} (Content-Type: application/json, else 415)
+    API->>Q: SendMessage {email, requestedAt}
+    API-->>FE: 202 (same response and timing for any email)
+
+    Q->>W: batch of requests (processed in parallel)
+    W->>DB: get the current link (consistent read)
+    W->>W: decideIssue → growing cooldown (60 s doubling to 15 min), newer link than requestedAt?
+    alt too soon, or a newer link exists
+        W-->>Q: done, nothing stored, no email
+    else
+        W->>W: token = randomBytes(32)
+        W->>DB: put {tokenHash: sha256(token), expiresAt, streak, requestId} only if the item is unchanged
+        W->>SES: email with /auth/callback#35;email=…&token=… (fragment)
+        W->>DB: set deliveredAt
+        opt SES fails
+            W->>DB: delete the undelivered link (if that fails too, this message's retry replaces it)
+            W-->>Q: batchItemFailures → retried, then dead-letter queue
+        end
+    end
+
+    U->>FE: opens the link, sees "Sign in as …?"
+    Note over FE: nothing happens until the click, so mail scanners cannot burn the link
+    U->>FE: clicks "Sign in"
+    FE->>API: POST /auth/verify {email, token}
+    API->>DB: get → check hash, expiry, used (read-only)
+    alt bad link
+        API-->>FE: 401, no Cognito call, no user created
+    end
+    API->>C: AdminGetUser, then on first sign-in AdminCreateUser (email_verified) + AdminSetUserPassword
+    API->>C: InitiateAuth(CUSTOM_AUTH)
+    C->>T: DefineAuthChallenge → CUSTOM_CHALLENGE
+    C->>T: CreateAuthChallenge
+    C-->>API: Session
+    API->>C: RespondToAuthChallenge(ANSWER = token)
+    C->>T: VerifyAuthChallengeResponse
+    T->>DB: get → check hash, email, expiry, used
+    T->>DB: conditional update used = true
+    T-->>C: answerCorrect
+    C->>T: DefineAuthChallenge → issueTokens
+    C-->>API: ID / access / refresh tokens
+    API-->>FE: 200 JWTs
+    FE->>API: GET /me (Authorization: ID token)
+    API-->>FE: 200 {sub, email, emailVerified}
+
+    Note over FE,C: ID and access tokens live 15 minutes
+    FE->>API: POST /auth/refresh {refreshToken} (token expiring, or /me answered 401)
+    API->>C: InitiateAuth(REFRESH_TOKEN_AUTH)
+    C-->>API: new ID / access tokens
+    API-->>FE: 200 (401 once the refresh token is revoked → back to login)
+
+    U->>FE: clicks "Sign out"
+    FE->>API: POST /logout {refreshToken}
+    API->>C: RevokeToken
+    API-->>FE: 204 (also for unknown or already revoked tokens)
+    FE->>FE: clear sessionStorage
