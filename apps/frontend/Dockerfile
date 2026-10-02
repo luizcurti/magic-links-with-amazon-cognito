@@ -1,7 +1,7 @@
 # Production frontend: nginx with security headers and /api proxied to API Gateway.
 # Build from the repository root: docker build -f apps/frontend/Dockerfile .
 
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/frontend/package.json apps/frontend/
