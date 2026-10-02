@@ -9,7 +9,7 @@ RUN npm ci --workspace apps/frontend --include-workspace-root=false --ignore-scr
 COPY apps/frontend apps/frontend
 RUN npx --workspace apps/frontend vite build
 
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 # API base URL, e.g. http://localstack:4566/restapis/<id>/local/_user_request_
 ENV API_PROXY_TARGET=http://127.0.0.1:4566
 COPY apps/frontend/nginx/default.conf.template /etc/nginx/templates/default.conf.template
