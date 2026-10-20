@@ -8,10 +8,13 @@ resource "aws_cognito_user_pool" "main" {
     case_sensitive = false
   }
 
+  # email is not `required`: Cognito insists every required attribute is in the app client's
+  # write_attributes, and the client must NOT be able to write email (see below). The email is
+  # the username, and auth-callback always creates users with it.
   schema {
     name                = "email"
     attribute_data_type = "String"
-    required            = true
+    required            = false
     mutable             = true
 
     string_attribute_constraints {
