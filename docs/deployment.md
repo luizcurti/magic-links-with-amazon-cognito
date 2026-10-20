@@ -4,7 +4,7 @@
 
 ## Local (LocalStack)
 
-**Requirements:** Docker, Node.js 22+, Terraform 1.6+, `jq`; optionally [tflint](https://github.com/terraform-linters/tflint) and [Checkov](https://www.checkov.io) for `make tf-scan`. LocalStack needs an auth token on a plan that includes Cognito and WAF ([plans](https://docs.localstack.cloud/aws/licensing/), [token](https://app.localstack.cloud/workspace/auth-token)). Lint, typecheck, unit tests, builds and the Terraform checks need no token.
+**Requirements:** Docker, Node.js 22+, Terraform 1.10+, `jq`; optionally [tflint](https://github.com/terraform-linters/tflint) and [Checkov](https://www.checkov.io) for `make tf-scan`. LocalStack needs an auth token on a plan that includes Cognito and WAF ([plans](https://docs.localstack.cloud/aws/licensing/), [token](https://app.localstack.cloud/workspace/auth-token)). Lint, typecheck, unit tests, builds and the Terraform checks need no token.
 
 ```bash
 npm install
@@ -65,7 +65,7 @@ make destroy    # destroy the LocalStack resources
 
 - **State** is local and git-ignored: the LocalStack stack is disposable and `make down` deletes both, so there is no bootstrap.
 - **Providers** are pinned (`aws ~> 5.100`, `archive ~> 2.8`) and locked in `.terraform.lock.hcl`.
-- **CI** plans and applies against a fresh LocalStack on every pull request; it never applies to AWS.
+- **CI** plans and applies against a fresh LocalStack on every pull request. Pushes to `main` also deploy to real AWS once configured: see [Real AWS via GitHub Actions](#real-aws-via-github-actions).
 
 ## Docker
 
@@ -89,5 +89,37 @@ make aws-destroy    # tear down
 
 - **Cost and account changes:** WAF, KMS, API Gateway, Lambda, SQS, DynamoDB and Cognito are billed (WAF and KMS monthly until destroyed); `aws_api_gateway_account` sets the account-wide CloudWatch role for API Gateway.
 - **`make test-aws`** blocks `POST /login` from your IP for the WAF window (5 minutes), creates and deletes `smoke-…@example.com` users, and sends WAF-test emails to the SES mailbox simulator.
-- **Production settings:** remote state needs an S3 bucket (versioning, encryption) and a `backend "s3"` block with `use_lockfile = true`. `ses_from_address` must be a verified address or domain (DKIM/SPF/DMARC) with SES out of the sandbox. `magic_link_callback_url` and `frontend_origin` point at the deployed frontend, which must send the same security headers as the nginx image. `alarm_email` subscribes an address to the alarms.
+- **Production settings:** the GitHub Actions deploy below already uses remote S3 state (versioning, encryption, `use_lockfile`). `ses_from_address` must be a verified address or domain (DKIM/SPF/DMARC) with SES out of the sandbox. `magic_link_callback_url` and `frontend_origin` point at the deployed frontend, which must send the same security headers as the nginx image. `alarm_email` subscribes an address to the alarms.
 - **Not in this stack:** alarms on WAF blocks and SES bounces, a budget alarm, Lambda aliases, refresh-token rotation, log retention beyond the variable's default.
+
+## Real AWS via GitHub Actions
+
+Pushes to `main` deploy to real AWS through the `deploy` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), after the lint/test and Terraform jobs pass (the LocalStack job may be skipped without a token). It authenticates with GitHub OIDC, so no AWS access keys are stored in GitHub. Until it is configured, the job skips the AWS steps and stays green.
+
+No `backend` block is committed: the job writes `infrastructure/terraform/ci_backend.tf` with an S3 backend right before `terraform init`, using the bucket created by [`bootstrap/`](../bootstrap) with native S3 locking. Don't also `make aws-infra` against the same account: the two states would diverge.
+
+One-time setup, with admin credentials for the target AWS account and `gh` logged in:
+
+```bash
+scripts/bootstrap.sh                 # asks for SES_FROM_ADDRESS
+```
+
+It applies [`bootstrap/`](../bootstrap) (remote-state bucket + the `magic-links-github-deploy` IAM role, which only the `production` environment of this repo can assume), then creates the `production` GitHub environment with `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET`, `AWS_REGION` and `SES_FROM_ADDRESS`. Extra arguments go to `terraform apply`: `-var="aws_region=…"` (default `eu-west-2`), `-var="create_oidc_provider=true"` on an account without the GitHub OIDC provider.
+
+Optional variables in the `production` environment: `ALARM_EMAIL` (subscribes to the alarm topic), `MANAGE_API_GATEWAY_ACCOUNT=false` when another stack in the same account and region already sets API Gateway's CloudWatch role, and protection rules (required reviewers) to approve each deploy.
+
+Then push to `main` (or `gh workflow run ci.yml --ref main`). The job builds the Lambdas, runs `terraform plan` + `apply` (`target = "aws"`, stage `prod`), runs the [`tests/aws`](../tests/aws/smoke.test.ts) smoke tests against the live stack, and prints the API URL and the SES sender's verification status in the job summary.
+
+**SES sandbox:** on the first deploy AWS emails `SES_FROM_ADDRESS` a verification link; click it, or no magic link is sent. While the account is in the sandbox, SES also only delivers *to* verified addresses, so test the sign-in with that same address. To try the UI against the deployed API, run the frontend locally:
+
+```bash
+VITE_API_PROXY_TARGET=<api url from the job summary> npm run dev:frontend   # http://localhost:5173
+```
+
+`magic_link_callback_url` and `frontend_origin` keep their `http://localhost:5173` defaults, so the emailed link opens that local frontend.
+
+### Tear down / recreate
+
+Run **Actions → Destroy → Run workflow** on `main` and type `destroy`. It deletes every resource of the stack (the KMS key enters its 7-day deletion window); the `bootstrap/` resources are kept, so **Actions → CI → Run workflow** on `main` recreates it with no setup.
+
+The deploy role's permissions ([`bootstrap/deploy_permissions.tf`](../bootstrap/deploy_permissions.tf)) are scoped by the `magic-links` name prefix or the `Project = magic-links` tag wherever AWS allows it; it can only attach the stack's three AWS-managed policies and can't modify itself.

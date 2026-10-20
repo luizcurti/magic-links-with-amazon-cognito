@@ -6,7 +6,8 @@ resource "aws_sns_topic" "alarms" {
 }
 
 resource "aws_sns_topic_subscription" "alarm_email" {
-  count = var.alarm_email == null ? 0 : 1
+  # null or "" (the CI deploy passes an empty ALARM_EMAIL when unset): no subscription.
+  count = var.alarm_email == null || var.alarm_email == "" ? 0 : 1
 
   topic_arn = aws_sns_topic.alarms.arn
   protocol  = "email"

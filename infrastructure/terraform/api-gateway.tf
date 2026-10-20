@@ -230,7 +230,8 @@ resource "aws_cloudwatch_log_group" "api_access" {
   retention_in_days = var.log_retention_days
 }
 
-# Account-level role for API Gateway logging.
+# Account-level role for API Gateway logging: one setting per account and region, shared by
+# every API there. Set manage_api_gateway_account = false when another stack already owns it.
 data "aws_iam_policy_document" "apigateway_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -243,17 +244,23 @@ data "aws_iam_policy_document" "apigateway_assume_role" {
 }
 
 resource "aws_iam_role" "apigateway_cloudwatch" {
+  count = var.manage_api_gateway_account ? 1 : 0
+
   name               = "${local.name}-apigateway-cloudwatch"
   assume_role_policy = data.aws_iam_policy_document.apigateway_assume_role.json
 }
 
 resource "aws_iam_role_policy_attachment" "apigateway_cloudwatch" {
-  role       = aws_iam_role.apigateway_cloudwatch.name
+  count = var.manage_api_gateway_account ? 1 : 0
+
+  role       = aws_iam_role.apigateway_cloudwatch[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
 }
 
 resource "aws_api_gateway_account" "main" {
-  cloudwatch_role_arn = aws_iam_role.apigateway_cloudwatch.arn
+  count = var.manage_api_gateway_account ? 1 : 0
+
+  cloudwatch_role_arn = aws_iam_role.apigateway_cloudwatch[0].arn
 
   depends_on = [aws_iam_role_policy_attachment.apigateway_cloudwatch]
 }

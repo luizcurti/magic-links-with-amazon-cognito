@@ -1,0 +1,107 @@
+name: Destroy
+
+# Manually tears down the real AWS stack (infrastructure/terraform) to stop paying for it while
+# unused (mainly the WAF web ACL and the KMS key, which are billed monthly). Recreate it with the
+# CI workflow's "Run workflow" button on main (or any push to main). The one-time bootstrap/
+# resources (state bucket, OIDC provider, deploy role) are kept.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to delete every AWS resource of this stack (Cognito users and the magic-link table included)'
+        required: true
+        type: string
+
+jobs:
+  destroy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: infrastructure/terraform
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_target: aws
+      TF_VAR_region: ${{ vars.AWS_REGION }}
+      TF_VAR_stage_name: prod
+      TF_VAR_ses_from_address: ${{ vars.SES_FROM_ADDRESS }}
+      TF_VAR_alarm_email: ${{ vars.ALARM_EMAIL }}
+      TF_VAR_manage_api_gateway_account: ${{ vars.MANAGE_API_GATEWAY_ACCOUNT || 'true' }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - name: Check confirmation
+        working-directory: .
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "destroy" ]; then
+            echo "::error title=Not confirmed::Type exactly \"destroy\" to run this workflow."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+
+      # lambda.tf zips dist/<function>/ even on destroy; the code itself is irrelevant here, so
+      # placeholders avoid a full npm install + build.
+      - name: Placeholder Lambda bundles
+        working-directory: .
+        run: |
+          for fn in login send-magic-link auth-callback me logout refresh \
+                    define-auth-challenge create-auth-challenge verify-auth-challenge; do
+            mkdir -p "dist/$fn"
+            echo "// placeholder for terraform destroy" > "dist/$fn/index.js"
+          done
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-destroy-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init (S3 remote state)
+        env:
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          cat > ci_backend.tf <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+          terraform init -input=false \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=magic-links-with-amazon-cognito/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform destroy
+        shell: bash # bash -eo pipefail, so `| tee` keeps Terraform's exit code
+        run: terraform destroy -auto-approve -input=false -no-color 2>&1 | tee destroy.log
+
+      - name: Report Terraform errors
+        if: failure()
+        run: |
+          [ -f destroy.log ] || exit 0
+          awk '{ gsub(/%/, "%25") }
+               /^Error: / { if (buf) print buf; buf = $0; n = 0; next }
+               buf && n < 15 { buf = buf "%0A" $0; n++ }
+               END { if (buf) print buf }' destroy.log |
+            while IFS= read -r block; do echo "::error title=Terraform (destroy.log)::${block}"; done
+
+      - name: Summary
+        run: |
+          echo "### Stack destroyed :wastebasket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "The KMS key is scheduled for deletion (7-day window). Recreate the stack with **Actions → CI → Run workflow** on \`main\`." >> "$GITHUB_STEP_SUMMARY"
