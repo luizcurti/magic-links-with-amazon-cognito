@@ -54,12 +54,13 @@ LocalStack's authorizer answers `500` instead of `401` for some malformed signat
 
 ## CI
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on pushes to `main` and on pull requests; any failing step fails the build.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on pushes to `main`, on pull requests and on manual runs; any failing step fails the build. [`destroy.yml`](../.github/workflows/destroy.yml) tears the AWS stack down on demand.
 
 | Job | Steps |
 |---|---|
 | **quality** | `npm ci`, `npm audit --audit-level=high`, lint, typecheck, unit tests with coverage, Lambda and frontend builds, `docker compose config`, frontend image build |
 | **terraform** | `fmt -check`, `init -backend=false`, `validate`, tflint, Checkov ([skips](../infrastructure/terraform/.checkov.yaml)) |
 | **integration** | LocalStack, `terraform plan` (job summary + `terraform-plan` artifact), apply to LocalStack, integration tests, Postman, Playwright against the frontend image, `make demo` |
+| **deploy** (push to `main`, once configured) | OIDC into AWS, `terraform plan` + `apply` with S3 remote state, then the `tests/aws` smoke tests against the live stack ([setup](deployment.md#real-aws-via-github-actions)) |
 
-The integration job runs only with a `LOCALSTACK_AUTH_TOKEN` repository secret. `make test-aws` is not part of CI: it needs an AWS account and blocks the runner's IP on `/login` for the WAF window. [Dependabot](../.github/dependabot.yml) opens weekly update PRs for npm, GitHub Actions, Terraform providers and Docker images.
+The integration job runs only with a `LOCALSTACK_AUTH_TOKEN` repository secret. The `tests/aws` smoke tests run in the **deploy** job after every AWS deploy; the WAF test only blocks that runner's IP on `/login` for the WAF window. [Dependabot](../.github/dependabot.yml) opens weekly update PRs for npm, GitHub Actions, Terraform providers and Docker images.

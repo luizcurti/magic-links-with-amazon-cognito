@@ -24,3 +24,12 @@ claude/
 test-results/
 playwright-report/
 tfplan*
+
+# CI/CD deploy writes these into infrastructure/terraform (see .github/workflows/ci.yml)
+infrastructure/terraform/ci_backend.tf
+infrastructure/terraform/*.log
+
+# bootstrap/ keeps its own local state (it creates the remote-state bucket)
+bootstrap/.terraform/
+bootstrap/terraform.tfstate
+bootstrap/terraform.tfstate.backup

@@ -188,3 +188,9 @@ variable "api_4xx_rate_threshold" {
     error_message = "api_4xx_rate_threshold must be in (0, 1]."
   }
 }
+
+variable "manage_api_gateway_account" {
+  description = "Whether this stack sets the account-wide CloudWatch Logs role for API Gateway (one per account and region). false when another stack in the same account/region already manages it."
+  type        = bool
+  default     = true
+}

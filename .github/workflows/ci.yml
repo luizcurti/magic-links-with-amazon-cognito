@@ -4,13 +4,17 @@ on:
   push:
     branches: [main]
   pull_request:
+  # "Run workflow" on main re-runs the pipeline and deploys, e.g. to recreate the stack after
+  # the Destroy workflow.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a run on main mid-deploy (it could leave a Terraform state lock behind).
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   quality:
@@ -57,6 +61,12 @@ jobs:
       - run: terraform validate
       - uses: terraform-linters/setup-tflint@v6
       - run: tflint --init && tflint --format compact
+      - name: Bootstrap fmt + validate
+        working-directory: bootstrap
+        run: |
+          terraform fmt -check -recursive
+          terraform init -backend=false -input=false
+          terraform validate
       - name: Checkov
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -119,3 +129,160 @@ jobs:
           path: |
             playwright-report/
             test-results/
+
+  # Deploys the stack to real AWS on every push to main (or manual run on main), once the checks
+  # pass (the LocalStack job may be skipped when there is no LocalStack token). Auth is GitHub
+  # OIDC -> IAM role (bootstrap/), so no AWS keys are stored in GitHub. Configuration lives in the
+  # `production` GitHub environment (see docs/deployment.md "Real AWS via GitHub Actions"); until
+  # AWS_DEPLOY_ROLE_ARN is set there, the job skips the AWS steps and stays green.
+  deploy:
+    name: Deploy to AWS
+    if: >-
+      always()
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main'
+      && needs.quality.result == 'success'
+      && needs.terraform.result == 'success'
+      && (needs.integration.result == 'success' || needs.integration.result == 'skipped')
+    needs: [quality, terraform, integration]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: infrastructure/terraform
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_target: aws
+      TF_VAR_region: ${{ vars.AWS_REGION }}
+      TF_VAR_stage_name: prod
+      TF_VAR_ses_from_address: ${{ vars.SES_FROM_ADDRESS }}
+      TF_VAR_alarm_email: ${{ vars.ALARM_EMAIL }}
+      # The API Gateway CloudWatch role is an account+region-wide setting. Set false if another
+      # stack in the same account/region already manages it.
+      TF_VAR_manage_api_gateway_account: ${{ vars.MANAGE_API_GATEWAY_ACCOUNT || 'true' }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - name: Check deploy configuration
+        id: config
+        working-directory: .
+        env:
+          ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          SES_FROM: ${{ vars.SES_FROM_ADDRESS }}
+        run: |
+          if [ -z "$ROLE_ARN" ]; then
+            echo "::notice title=Deploy skipped::AWS_DEPLOY_ROLE_ARN is not set in the production environment. Run scripts/bootstrap.sh (see docs/deployment.md)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          missing=""
+          [ -z "$AWS_REGION" ] && missing="$missing AWS_REGION"
+          [ -z "$STATE_BUCKET" ] && missing="$missing TF_STATE_BUCKET"
+          [ -z "$SES_FROM" ] && missing="$missing SES_FROM_ADDRESS"
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy misconfigured::Missing in the production environment:$missing"
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.config.outputs.enabled == 'true'
+      - uses: actions/setup-node@v7
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Build Lambdas
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: .
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.config.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+        if: steps.config.outputs.enabled == 'true'
+        with:
+          terraform_wrapper: false
+
+      # The S3 backend is only added here, at deploy time, so LocalStack runs keep local state.
+      - name: Terraform init (S3 remote state)
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          cat > ci_backend.tf <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+          terraform init -input=false \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=magic-links-with-amazon-cognito/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform plan
+        if: steps.config.outputs.enabled == 'true'
+        shell: bash # bash -eo pipefail, so `| tee` keeps Terraform's exit code
+        run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.log
+
+      - name: Terraform apply
+        if: steps.config.outputs.enabled == 'true'
+        shell: bash
+        run: terraform apply -input=false -no-color tfplan 2>&1 | tee apply.log
+
+      # Surface each Terraform "Error:" block as a run annotation, so failures are readable
+      # from the run summary / checks API without downloading the raw job log.
+      - name: Report Terraform errors
+        if: failure() && steps.config.outputs.enabled == 'true'
+        run: |
+          for f in plan.log apply.log; do
+            [ -f "$f" ] || continue
+            awk '{ gsub(/%/, "%25") }
+                 /^Error: / { if (buf) print buf; buf = $0; n = 0; next }
+                 buf && n < 15 { buf = buf "%0A" $0; n++ }
+                 END { if (buf) print buf }' "$f" |
+              while IFS= read -r block; do echo "::error title=Terraform ($f)::${block}"; done
+          done
+
+      # tests/aws: what LocalStack does not enforce (write_attributes, the decoy challenge for
+      # unknown users, the Cognito authorizer rejecting forged tokens, the WAF login rate limit),
+      # against the live stack. Test users are deleted afterwards; the WAF test only blocks this
+      # runner's IP.
+      - name: Smoke tests (real AWS)
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: .
+        run: AWS_SMOKE=1 npx vitest run tests/aws
+
+      - name: Summary
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          SES_FROM: ${{ vars.SES_FROM_ADDRESS }}
+        run: |
+          API_URL=$(terraform output -raw api_url)
+          status=$(aws ses get-identity-verification-attributes --identities "$SES_FROM" \
+            --query "VerificationAttributes.\"$SES_FROM\".VerificationStatus" --output text)
+          {
+            echo "### Deployed :rocket:"
+            echo "API URL: ${API_URL}"
+            echo
+            echo "SES sender \`${SES_FROM}\`: **${status}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" != "Success" ]; then
+            echo "::warning title=SES sender not verified::Open the email AWS sent to ${SES_FROM} and click the verification link, or magic-link emails will not be sent."
+          fi
