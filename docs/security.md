@@ -13,7 +13,7 @@
 | Cross-account use | The verify trigger reads the email from Cognito's user attributes, not from the client. |
 | Email takeover | The app client cannot write `email` (`write_attributes`). Emails are `email_verified = true`, since tokens are only issued to whoever clicked a link sent there. Users are identified by `sub`. |
 | Timing attacks | Hashes are compared with `crypto.timingSafeEqual`; `/login` does no per-email work. |
-| Enumeration | `/login` answers the same `202` for every valid email. With `prevent_user_existence_errors`, Cognito runs the triggers for unknown users, who get the same decoy challenge and never tokens; challenges carry no parameters. |
+| Enumeration | `/login` answers the same `202` for every valid email. With `prevent_user_existence_errors`, Cognito runs the triggers for unknown users, who get the same decoy challenge and never tokens; every challenge carries the same constant parameter (`challenge: MAGIC_LINK`), never the email. (Real Cognito rejects empty challenge parameters.) |
 | Log exposure | Tokens and JWTs are never logged; emails are masked (`l***@example.com`); the WAF redacts `Authorization`. |
 | URL leakage | Email and token travel in the URL fragment, never sent to servers; the callback page removes them from the address bar and history; `no-referrer` keeps them out of `Referer`. |
 | Link scanners, link injection | Nothing is verified until the user clicks "Sign in as …?". |
