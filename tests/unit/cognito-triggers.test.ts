@@ -91,16 +91,17 @@ describe("DefineAuthChallenge", () => {
 });
 
 describe("CreateAuthChallenge", () => {
-  it("publishes nothing and keeps no secret in the challenge", async () => {
+  it("publishes only a constant, non-empty challenge and keeps no secret in it", async () => {
     const event = {
       request: { userAttributes: { email: EMAIL }, challengeName: "CUSTOM_CHALLENGE", session: [] },
       response: {},
     } as unknown as CreateAuthChallengeTriggerEvent;
 
     const result = (await createAuthChallenge(event, context, callback))!;
+    // Real Cognito rejects empty challenge parameters (NotAuthorizedException).
     expect(result.response).toEqual({
-      publicChallengeParameters: {},
-      privateChallengeParameters: {},
+      publicChallengeParameters: { challenge: "MAGIC_LINK" },
+      privateChallengeParameters: { challenge: "MAGIC_LINK" },
       challengeMetadata: "MAGIC_LINK",
     });
   });
