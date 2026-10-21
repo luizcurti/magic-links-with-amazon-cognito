@@ -1,0 +1,29 @@
+flowchart LR
+    subgraph Dev["Developer machine / GitHub Actions runner"]
+        TF["Terraform<br/>infrastructure/terraform"]
+        ESB["esbuild<br/>dist/&lt;fn&gt;/index.js"]
+        VITE["Vite dev server :5173<br/>/api proxy (make frontend)"]
+        TESTS["Vitest integration<br/>newman collection<br/>Playwright browser E2E"]
+        SMOKE["Vitest AWS smoke tests<br/>(make test-aws)"]
+    end
+
+    AWS["Real AWS account<br/>Terraform workspace aws · target = aws"]
+
+    subgraph Docker["Docker"]
+        subgraph Compose["docker compose"]
+            LS["LocalStack :4566<br/>API GW · WAF · Lambda · Cognito<br/>DynamoDB · SES · SQS · SNS · KMS · IAM · CloudWatch"]
+            NGINX["frontend :8088 (profile frontend)<br/>nginx · production build<br/>security headers · /api proxy"]
+        end
+        FN["Lambda runtime containers<br/>(siblings on network magic-links)"]
+    end
+
+    ESB -- "zip" --> TF
+    TF -- "apply (AWS APIs)" --> LS
+    LS -- "docker.sock" --> FN
+    VITE -- "HTTP" --> LS
+    TESTS -- "HTTP + /_aws/ses" --> LS
+    TESTS -- "browser (local)" --> VITE
+    TESTS -- "browser (CI, make test-e2e-docker)" --> NGINX
+    NGINX -- "/api" --> LS
+    TF -. "make aws-infra" .-> AWS
+    SMOKE -. "what LocalStack does not enforce" .-> AWS

@@ -1,0 +1,26 @@
+server {
+    listen 8080;
+    root /usr/share/nginx/html;
+    server_tokens off;
+
+    # Same headers as SECURITY_HEADERS in vite.config.ts.
+    add_header Content-Security-Policy "frame-ancestors 'none'" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location /api/ {
+        proxy_pass ${API_PROXY_TARGET}/;
+    }
+
+    # Client-side routes.
+    location / {
+        try_files $uri /index.html;
+    }
+}
