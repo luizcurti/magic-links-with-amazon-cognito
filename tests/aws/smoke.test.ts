@@ -158,8 +158,10 @@ describe.runIf(stack)("real AWS smoke tests", { timeout: 180_000 }, () => {
 
     expect((await me(idToken)).status).toBe(200);
     const rejected = await me(`${header}.${forged}.${signature}`);
-    expect(rejected.status).toBe(401);
-    // API Gateway's own 401 must still let a cross-origin frontend read the status.
+    // The Cognito authorizer answers 401 for a missing or malformed token, and 403 for a
+    // well-formed one whose signature does not verify (LocalStack answers 401 to both).
+    expect([401, 403]).toContain(rejected.status);
+    // API Gateway's own 4xx must still let a cross-origin frontend read the status.
     expect(rejected.headers.get("access-control-allow-origin")).toBeTruthy();
     expect((await me(`${none}.${forged}.`)).status).toBeGreaterThanOrEqual(401);
   });

@@ -6,7 +6,7 @@
 |---|---|---|---|
 | `POST` | `/login` | none | `202` for every valid email; the link is sent asynchronously |
 | `POST` | `/auth/verify` | none | `200` with Cognito JWTs, `401` for a bad link |
-| `GET` | `/me` | ID token | `200` with the verified claims, `401` |
+| `GET` | `/me` | ID token | `200` with the verified claims, `401` (missing, malformed or expired token), `403` (a well-formed token whose signature does not verify) |
 | `POST` | `/auth/refresh` | refresh token | `200` with new ID and access tokens, `401` once revoked or expired |
 | `POST` | `/logout` | refresh token | `204`, also for unknown or revoked tokens |
 
